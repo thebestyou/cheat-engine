@@ -1,6 +1,10 @@
 unit addresslist;
 
+{$warn 3057 off}
+
 {$mode DELPHI}
+
+
 
 interface
 
@@ -78,9 +82,9 @@ type
     procedure sectiontrack(HeaderControl: TCustomHeaderControl; Section: THeaderSection; Width: Integer; State: TSectionTrackState);
     procedure sectionClick(HeaderControl: TCustomHeaderControl; Section: THeaderSection);
     procedure FocusChange(sender: TObject);
-    procedure DragOver(Sender, Source: TObject; X,Y: Integer; State: TDragState; var Accept: Boolean);
-    procedure DragDrop(Sender, Source: TObject; X,Y: Integer);
-    procedure DragEnd(Sender, Target: TObject; X,Y: Integer);
+    procedure TVDragOver(Sender, Source: TObject; X,Y: Integer; State: TDragState; var Accept: Boolean);
+    procedure TVDragDrop(Sender, Source: TObject; X,Y: Integer);
+    procedure TVDragEnd(Sender, Target: TObject; X,Y: Integer);
     procedure TreeviewOnCollapse(Sender: TObject; Node: TTreeNode; var AllowCollapse: Boolean);
     procedure TreeviewOnExpand(Sender: TObject; Node: TTreeNode; var AllowExpansion: Boolean);
     procedure TreeviewDblClick(Sender: TObject);
@@ -100,7 +104,8 @@ type
     function GetSelcount: integer;
     function GetMemRecItemByIndex(i: integer): TMemoryRecord;
     procedure setPopupMenu(menu: TPopupMenu);
-    function getPopupMenu: TPopupMenu;
+    {$warn 3057 off}
+    function getPopupMenu: TPopupMenu; //on purpose
     function getSelectedRecord: TMemoryRecord;
     procedure setSelectedRecord(memrec: TMemoryrecord);
 
@@ -108,12 +113,8 @@ type
 
     function CheatTableNodeHasOnlyAutoAssemblerScripts(CheatTable: TDOMNode): boolean; //helperfunction
 
-    function activecompare(a: tmemoryrecord; b: tmemoryrecord): integer;
-    function descriptioncompare(a: tmemoryrecord; b: tmemoryrecord): integer;
-    function addresscompare(a: tmemoryrecord; b: tmemoryrecord): integer;
-    function valuetypecompare(a: tmemoryrecord; b: tmemoryrecord): integer;
-    function valuecompare(a: tmemoryrecord; b: tmemoryrecord): integer;
-    procedure sort(firstnode: ttreenode; compareRoutine: TCompareRoutine; direction: boolean);
+
+    procedure sort(firstnode: ttreenode; compareRoutine: TListSortCompare; direction: boolean);
     procedure SymbolsLoaded(sender: TObject);
   public
     //needsToReinterpret: boolean;
@@ -198,7 +199,7 @@ type
 implementation
 
 uses dialogs, formAddressChangeUnit, TypePopup, PasteTableentryFRM, mainunit,
-  ProcessHandlerUnit, frmEditHistoryUnit, globals;
+  ProcessHandlerUnit, frmEditHistoryUnit, globals, filehandler;
 
 resourcestring
   rsDoYouWantToDeleteTheSelectedAddress = 'Do you want to delete the selected address?';
@@ -375,9 +376,13 @@ end;
 procedure TAddresslist.DeactivateSelected;
 var i: integer;
 begin
-  for i:=0 to count-1 do
+  i:=0;
+  while i<count do
+  begin
     if memrecitems[i].isSelected then
       memrecitems[i].active:=false;    //this will also reset the allow* booleans
+    i:=i+1
+  end;
 end;
 
 
@@ -433,14 +438,23 @@ var
   i: integer;
   oldlogWrites: boolean;
 begin
-  oldlogWrites:=logwrites;
-  //oldlogWrites:=false;
+  if GetCurrentThreadId=MainThreadID then
+  begin
+    oldlogWrites:=logwrites;
+
+    //oldlogWrites:=false;
+    blockfilehandlerpopup:=true;
+  end;
 
   try
     for i:=0 to count-1 do
       memrecitems[i].ApplyFreeze;
   finally
-    logWrites:=oldlogWrites;
+    if GetCurrentThreadId=MainThreadID then
+    begin
+      logWrites:=oldlogWrites;
+      blockfilehandlerpopup:=false;
+    end;
   end;
 end;
 
@@ -491,15 +505,12 @@ var
   doc: TXMLDocument;
   cheattable,CheatEntries: TDOMNode;
   i: integer;
-
-  s: TStringstream;
-
-
+  ms: TMemoryStream;
 begin
   result:='';
   doc:=TXMLDocument.Create;
-  s:=TStringstream.create('');
 
+  ms:=TMemorystream.Create;
 
   cheattable:=doc.CreateElement('CheatTable');
   doc.AppendChild(cheattable);
@@ -509,11 +520,15 @@ begin
 
   try
     saveTableXMLToNode(CheatEntries, selectedOnly);
-    WriteXMLFile(doc,s);
-    result:=s.DataString;
+    WriteXMLFile(doc,ms);
+    ms.WriteByte(0);
+
+    ms.Position:=0;
+
+    result:=pchar(ms.Memory); //s.UnicodeDataString;
   finally
     doc.free;
-    s.free;
+    ms.free;
   end;
 end;
 
@@ -555,7 +570,7 @@ var doc: TXMLDocument;
 
     currentEntry: TDOMNode;
 
-    s: TStringStream;
+    s: TMemoryStream;
 
     replace_find: string;
     replace_with: string;
@@ -563,11 +578,17 @@ var doc: TXMLDocument;
     changeoffset: ptrUint;
     x: ptrUint;
     i: integer;
+    childrenaswell: boolean;
+
+
 begin
   doc:=nil;
   s:=nil;
 
-  s:=TStringstream.Create(xml);
+  s:=TMemoryStream.Create;
+  s.WriteBuffer(xml[1],length(xml));
+  s.position:=0;
+
 
   try
     try
@@ -603,6 +624,7 @@ begin
                 changeoffset:=0;
               end;
 
+              childrenaswell:=frmPasteTableentry.cbChildrenAsWell.Checked;
             finally
               freeandnil(frmPasteTableentry);
             end;
@@ -628,23 +650,10 @@ begin
 
 
               if replace_find<>'' then
-                memrec.Description:=stringreplace(memrec.Description,replace_find,replace_with,[rfReplaceAll,rfIgnoreCase]);
+                memrec.replaceDescription(replace_find, replace_with, childrenaswell);
 
               if changeoffset<>0 then
-              begin
-                if memrec.interpretableaddress<>'' then //always true
-                begin
-                  try
-                    x:=symhandler.getAddressFromName(memrec.interpretableaddress);
-                    x:=x+changeoffset;
-                    memrec.interpretableaddress:=symhandler.getNameFromAddress(x,true,true)
-                  except
-                    memrec.interpretableaddress:=inttohex(memrec.getBaseAddress+changeoffset,8);
-                  end;
-
-                  memrec.ReinterpretAddress;
-                end;
-              end;
+                memrec.adjustAddressBy(changeoffset, childrenaswell);
             end;
             currentEntry:=currentEntry.NextSibling;
           end;
@@ -671,14 +680,21 @@ end;
 procedure TAddresslist.CreateGroup(groupname: string);
 var
   memrec: TMemoryRecord;
+  n: TTreenode;
 begin
+
   memrec:=TMemoryrecord.Create(self);
   memrec.id:=GetUniqueMemrecId;
   memrec.isGroupHeader:=true;
   memrec.Description:=groupname;
-  memrec.treenode:=Treeview.Items.AddObject(nil,'',memrec);
-  memrec.treenode.DropTarget:=true;
 
+  if SelectedRecord<>nil then
+    memrec.treenode:=Treeview.Items.InsertObjectBehind(SelectedRecord.treenode,'', memrec)
+  else
+    memrec.treenode:=Treeview.Items.AddObject(nil,'',memrec);
+
+
+  memrec.treenode.DropTarget:=true;
   MainForm.editedsincelastsave:=true;
 end;
 
@@ -1046,9 +1062,6 @@ var
 
   frmMemrecCombobox: TfrmMemrecCombobox;
 begin
-
-
-
   if memrec.DropDownCount=0 then
   begin
     value:=AnsiToUtf8(memrec.value);
@@ -1067,7 +1080,11 @@ begin
     frmMemrecCombobox:=TfrmMemrecCombobox.Create(memrec);
     canceled:=frmMemrecCombobox.showmodal<>mrok;
 
-    value:=utf8toansi(frmMemrecCombobox.value);
+    if memrec.DropDownReadOnly and memrec.DropDownDescriptionOnly and memrec.DisplayAsDropDownListItem and (frmMemrecCombobox.value='*') then
+      canceled:=true;
+
+    if not canceled then
+      value:=utf8toansi(frmMemrecCombobox.value);
 
     frmMemrecCombobox.free;
   end;
@@ -1204,7 +1221,7 @@ begin
     while n<>nil do
     begin
       if moManualExpandCollapse in  TMemoryRecord(n.data).Options then
-        inc(textrect.left,treeview.indent div 2);
+        inc(textrect.left,expandsignsize+1);
       n:=n.parent;
     end;
 
@@ -1277,7 +1294,7 @@ begin
     begin
       if moManualExpandCollapse in  TMemoryRecord(n.data).Options then
       begin
-        inc(textrect.left,treeview.indent div 2);
+        inc(textrect.left,expandsignsize+1);
       end;
 
       n:=n.parent;
@@ -1296,7 +1313,7 @@ begin
 
         treeview.OnCollapsing:=TreeviewOnCollapse;
       end;
-      inc(textrect.left,treeview.indent div 2);
+      inc(textrect.left,expandsignsize+1);
     end;
 
     checkboxstart:=textrect.left+1;
@@ -1373,19 +1390,14 @@ end;   }
 
 
 
-procedure TAddresslist.sort(firstnode: ttreenode; compareRoutine: TCompareRoutine; direction: boolean );
+procedure TAddresslist.sort(firstnode: ttreenode; compareRoutine: TListSortCompare; direction: boolean );
 {
   sort from the first node till there is no more sibling
 }
 var
-  swapped: boolean;
-  lastnode: ttreenode;
   currentnode: ttreenode;
-  i,d: integer;
-
-  firstnodeindex: integer;
-
-  currentindex: integer;
+  i: integer;
+  list: TList;
 begin
   treeview.BeginUpdate;
   try
@@ -1401,48 +1413,43 @@ begin
 
     //all the children have been sorted, so now sort myself
 
+    list:=tlist.create;
+
+    currentnode:=firstnode;
+    while currentnode<>nil do
+    begin
+      list.Add(currentnode.Data);
+      currentnode:=currentnode.GetNextSibling;
+    end;
+
+    list.Sort(compareRoutine);
+
+    currentnode:=firstnode;
 
     if direction then
-      d:=1
+      i:=0
     else
-      d:=-1;
+      i:=list.count-1;
 
-
-    firstnodeindex:=firstnode.absoluteindex;
-
-    swapped:=true;
-    while swapped do
+    while currentnode<>nil do
     begin
-      firstnode:=treeview.items[firstnodeindex];
-
-      swapped:=false;
-      lastnode:=firstnode;
-      currentnode:=lastnode.GetNextSibling;
-      while currentnode<>nil do
-      begin
-        currentindex:=currentnode.AbsoluteIndex;
-        lastnode:=currentnode.GetPrevSibling;
-
-        if (compareRoutine(tmemoryrecord(lastnode.data), tmemoryrecord(currentnode.data))*d)<0 then
-        begin
-          currentnode.MoveTo(lastnode, naInsert); //move the current node in front of the previous node
-          swapped:=true;
-        end;
-
-        currentnode:=treeview.Items[currentindex];
-        currentnode:=currentnode.GetNextSibling;
-      end;
-
-
-
+      currentnode.data:=list[i];
+      tmemoryrecord(list[i]).treenode:=currentnode;
+      currentnode:=currentnode.GetNextSibling;
+      if direction then
+        inc(i)
+      else
+        dec(i);
     end;
+
+    list.free;
 
   finally
     treeview.EndUpdate;
   end;
 end;
 
-function Taddresslist.activecompare(a: tmemoryrecord; b: tmemoryrecord): integer;
+function activecompare(a: tmemoryrecord; b: tmemoryrecord): integer;
 var ra, rb: integer;
 begin
   if not a.active then ra:=0 else
@@ -1464,11 +1471,11 @@ procedure TAddresslist.sortByActive;
 type TCompareState=(inactive, allowincrease, allowdecrease, active);
 begin
   if count=0 then exit;
-  sort(treeview.items[0], activecompare, activesortdirection);
+  sort(treeview.items[0], TListSortCompare(activecompare), activesortdirection);
   activesortdirection:=not activesortdirection;
 end;
 
-function Taddresslist.descriptioncompare(a: tmemoryrecord; b: tmemoryrecord): integer;
+function descriptioncompare(a: tmemoryrecord; b: tmemoryrecord): integer;
 begin
   result:=0; //equal
   if b.description>a.description then
@@ -1480,11 +1487,11 @@ end;
 procedure TAddresslist.sortByDescription;
 begin
   if count=0 then exit;
-  sort(treeview.items[0], descriptioncompare, descriptionsortdirection);
+  sort(treeview.items[0], TListSortCompare(descriptioncompare), descriptionsortdirection);
   descriptionsortdirection:=not descriptionsortdirection;
 end;
 
-function Taddresslist.addresscompare(a: tmemoryrecord; b: tmemoryrecord): integer;
+function addresscompare(a: tmemoryrecord; b: tmemoryrecord): integer;
 begin
   result:=b.getRealAddress-a.GetRealAddress;
 end;
@@ -1492,11 +1499,11 @@ end;
 procedure TAddresslist.sortByAddress;
 begin
   if count=0 then exit;
-  sort(treeview.items[0], addresscompare, addresssortdirection);
+  sort(treeview.items[0], TListSortCompare(addresscompare), addresssortdirection);
   addresssortdirection:=not addresssortdirection;
 end;
 
-function Taddresslist.valuetypecompare(a: tmemoryrecord; b: tmemoryrecord): integer;
+function valuetypecompare(a: tmemoryrecord; b: tmemoryrecord): integer;
 begin
   result:=integer(b.VarType)-integer(a.VarType);
 end;
@@ -1504,11 +1511,11 @@ end;
 procedure TAddresslist.sortByValueType;
 begin
   if count=0 then exit;
-  sort(treeview.items[0], valuetypecompare, valuetypesortdirection );
+  sort(treeview.items[0], TListSortCompare(valuetypecompare), valuetypesortdirection );
   valuetypesortdirection:=not valuetypesortdirection;
 end;
 
-function Taddresslist.valuecompare(a: tmemoryrecord; b: tmemoryrecord): integer;
+function valuecompare(a: tmemoryrecord; b: tmemoryrecord): integer;
 var va, vb: double;
   oka,okb: boolean;
 begin
@@ -1521,7 +1528,7 @@ end;
 procedure TAddresslist.sortByValue;
 begin
   if count=0 then exit;
-  sort(treeview.items[0], valuecompare, valuesortdirection);
+  sort(treeview.items[0], TListSortCompare(valuecompare), valuesortdirection);
   valuesortdirection:=not valuesortdirection;
 end;
 
@@ -1547,12 +1554,12 @@ begin
   treeview.refresh;
 end;
 
-procedure TAddresslist.DragEnd(Sender, Target: TObject; X,Y: Integer);
+procedure TAddresslist.TVDragEnd(Sender, Target: TObject; X,Y: Integer);
 begin
   CurrentlyDraggedOverNode:=nil;
 end;
 
-procedure TAddresslist.DragOver(Sender, Source: TObject; X,Y: Integer; State: TDragState; var Accept: Boolean);
+procedure TAddresslist.TVDragOver(Sender, Source: TObject; X,Y: Integer; State: TDragState; var Accept: Boolean);
 var t: integer;
 begin
   CurrentlyDraggedOverNode:=TreeView.GetNodeAt(x,y);
@@ -1575,7 +1582,7 @@ begin
   treeview.refresh;
 end;
 
-procedure TAddresslist.DragDrop(Sender, Source: TObject; X,Y: Integer);
+procedure TAddresslist.TVDragDrop(Sender, Source: TObject; X,Y: Integer);
 var
   node: TTreenode;
   i: integer;
@@ -1746,10 +1753,10 @@ begin
   updated:=false;
 
   start:=0;
-  stop:=treeview.Items.Count;
+  stop:=treeview.Items.Count-1;
 
+   {
 
-  {
   if treeview.TopItem<>nil then
     start:=treeview.TopItem.Index
   else
@@ -2203,9 +2210,9 @@ begin
   treeview.OnExit:=Focuschange;
   treeview.OnEnter:=Focuschange;
 
-  treeview.OnDragOver:=DragOver;
-  treeview.OnDragDrop:=DragDrop;
-  treeview.OnEndDrag:=DragEnd;
+  treeview.OnDragOver:=TVDragOver;
+  treeview.OnDragDrop:=TVDragDrop;
+  treeview.OnEndDrag:=TVDragEnd;
  // treeview.OnKeyDown:=treeviewkeydown;
 //  treeview.Indent:=32;
 
@@ -2276,7 +2283,7 @@ begin
   symhandler.AddFinishedLoadingSymbolsNotification(SymbolsLoaded);
 
 
-  checkboxActiveSelectedColor:=clBlack;
+  checkboxActiveSelectedColor:=clRed;
   CheckboxActiveColor:=clRed;
   CheckboxSelectedColor:=clWindowtext;
   CheckboxColor:=clWindowtext;

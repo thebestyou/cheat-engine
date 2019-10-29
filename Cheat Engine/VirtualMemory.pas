@@ -194,6 +194,13 @@ begin
           continue;
         end;
 
+      if Skip_PAGE_WRITECOMBINE then
+        if (mbi.AllocationProtect and PAGE_WRITECOMBINE)=PAGE_WRITECOMBINE then
+        begin
+          address:=ptrUint(mbi.BaseAddress)+mbi.RegionSize;
+          continue;
+        end;
+
       setlength(memoryregion,length(memoryregion)+1);
 
       memoryregion[length(memoryregion)-1].BaseAddress:=ptrUint(mbi.baseaddress);  //just remember this location
@@ -295,7 +302,7 @@ end;
 
 destructor TVirtualMemory.destroy;
 begin
-  if buffer<>nil then freemem(buffer);
+  if buffer<>nil then freememandnil(buffer);
   setlength(memoryregion,0);
   setlength(memoryregion2,0);
   inherited destroy;

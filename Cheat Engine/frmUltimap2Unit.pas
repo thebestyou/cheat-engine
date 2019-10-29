@@ -1,6 +1,6 @@
 unit frmUltimap2Unit;
 
-{$mode objfpc}{$H+}
+{$mode OBJFPC}{$H+}
 
 
 
@@ -11,7 +11,8 @@ uses
   ExtCtrls, StdCtrls, ComCtrls, EditBtn, Menus, libipt, ProcessHandlerUnit,
   DBK32functions, commonTypeDefs, MemFuncs, AvgLvlTree, Math, FileMapping,
   syncobjs, CEFuncProc, registry, NewKernelHandler, LazFileUtils, disassembler,
-  strutils, Clipbrd;
+  strutils, Clipbrd, lua, lualib, lauxlib, luaform, LuaClass, frmUltimapUnit,
+  genericHotkey;
 
 
 const
@@ -56,6 +57,11 @@ type
     filemap: TFileMapping;
 
     disassembler: Tdisassembler;
+
+    iptConfig: pt_config;
+    decoder: ppt_insn_decoder;
+    callbackImage: PPT_Image;
+
     function addIPPageToRegionTree(IP: QWORD): PRegionInfo;
     function addIPBlockToRegionTree(IP: QWORD): PRegionInfo;
     procedure HandleIP(ip: QWORD; c: pt_insn_class);
@@ -79,11 +85,12 @@ type
 
     parseAsText: boolean;
     textFolder: string;
+    ts: TStringList;
 
-
+    procedure processData(e: TUltimap2DataEvent);
     procedure execute; override;
 
-    constructor create(CreateSuspended: boolean);
+    constructor create(CreateSuspended: boolean; cpuid: integer; owner: TfrmUltimap2);
     destructor destroy; override;
   end;
 
@@ -157,6 +164,10 @@ type
     cbParseToTextfile: TCheckBox;
     cbAutoProcess: TCheckBox;
     cbPauseTargetWhileProcessing: TCheckBox;
+    cbNoInterrupts: TCheckBox;
+    cbTraceAllProcesses: TCheckBox;
+    cbUsermode: TCheckBox;
+    cbKernelmode: TCheckBox;
     deTargetFolder: TDirectoryEdit;
     deTextOut: TDirectoryEdit;
     edtFlushInterval: TEdit;
@@ -164,6 +175,16 @@ type
     edtBufSize: TEdit;
     edtCallCount: TEdit;
     gbRange: TGroupBox;
+    MainMenu1: TMainMenu;
+    MenuItem2: TMenuItem;
+    MenuItem3: TMenuItem;
+    MenuItem4: TMenuItem;
+    MenuItem5: TMenuItem;
+    miRemoveHotkey: TMenuItem;
+    miSetHotkey: TMenuItem;
+    OpenDialog1: TOpenDialog;
+    pmSetHotkey: TPopupMenu;
+    um2ImageList: TImageList;
     Label1: TLabel;
     Label2: TLabel;
     Label4: TLabel;
@@ -205,6 +226,7 @@ type
     procedure btnShowResultsClick(Sender: TObject);
     procedure cbfilterOutNewEntriesChange(Sender: TObject);
     procedure cbParseToTextfileChange(Sender: TObject);
+    procedure cbTraceAllProcessesChange(Sender: TObject);
     procedure cbTraceIntervalChange(Sender: TObject);
     procedure cbWhenFilesizeAboveChange(Sender: TObject);
     procedure edtFlushIntervalChange(Sender: TObject);
@@ -217,11 +239,16 @@ type
     procedure ListView1Data(Sender: TObject; Item: TListItem);
     procedure ListView1DblClick(Sender: TObject);
     procedure MenuItem1Click(Sender: TObject);
+    procedure MenuItem4Click(Sender: TObject);
+    procedure MenuItem5Click(Sender: TObject);
     procedure miCloseClick(Sender: TObject);
     procedure miRangeDeleteSelectedClick(Sender: TObject);
     procedure miRangeDeleteAllClick(Sender: TObject);
+    procedure miRemoveHotkeyClick(Sender: TObject);
+    procedure miSetHotkeyClick(Sender: TObject);
     procedure Panel5Click(Sender: TObject);
     procedure pmRangeOptionsPopup(Sender: TObject);
+    procedure pmSetHotkeyPopup(Sender: TObject);
     procedure rbLogToFolderChange(Sender: TObject);
     procedure tActivatorTimer(Sender: TObject);
     procedure tbRecordPauseChange(Sender: TObject);
@@ -255,6 +282,8 @@ type
     FlushInterval: integer;
     maxfilesize: integer;
 
+    filterHotkey: array [-1..1] of TGenericHotkey; //-1,0,1 due to existing tags
+
     function RegionCompare(Tree: TAvgLvlTree; Data1, Data2: pointer): integer;
 
     function  ValidListCompare(Tree: TAvgLvlTree; Data1, Data2: Pointer): integer;
@@ -271,13 +300,19 @@ type
 
     procedure setState(state: TRecordState);
     function ModuleSelectEvent(index: integer; listText: string): string;
+    function getMatchCount: integer;
+
     property state:TRecordState read fstate write setState;
   public
     { public declarations }
     allNewAreInvalid: boolean;
 
-    function IsMatchingAddress(address: ptruint): boolean;
+    function IsMatchingAddress(address: ptruint; count: pinteger=nil): boolean;
+  published
+    property Count: integer read getMatchCount;
   end;
+
+procedure initializeLuaUltimap2;
 
 var
   frmUltimap2: TfrmUltimap2;
@@ -286,7 +321,8 @@ implementation
 
 {$R *.lfm}
 
-uses symbolhandler, frmSelectionlistunit, cpuidUnit, MemoryBrowserFormUnit, AdvancedOptionsUnit;
+uses symbolhandler, symbolhandlerstructs, frmSelectionlistunit, cpuidUnit, MemoryBrowserFormUnit,
+  AdvancedOptionsUnit, vmxfunctions, LuaHandler, frmHotkeyExUnit;
 
 resourcestring
 rsRecording2 = 'Recording';
@@ -314,45 +350,52 @@ rsPutBetweenToMarsAsAnAutoStopRange = '(Put between *''s to mark as an auto stop
 rsTheRangeYouHaveProvidedIsAnExitRangeBeAware = 'The range you have provided is an ''Exit'' range. Be aware that this doesn''t mean it will always stop at that range, or that the result is what you expect. A context switch to another thread between the start and stop can add a lot of other data';
 rsIsAnInvalidRange = ' is an invalid range';
 rsInstructionPointerListSize = 'Instruction Pointer List Size:';
+rsRangesNeedDBVMInWindows10 = 'To use ranges with Ultimap2 in windows 10, you '
+  +'must hide the fact that you use ranges from it. To be able to do that '
+  +'DBVM needs to be running. There is a chance running DBVM can crash your '
+  +'system and make you lose your data(So don''t forget to save first). Do you'
+  +' want to run DBVM?';
 
 //worker
 
 
 
 function iptReadMemory(buffer: PByteArray; size: SIZE_T; asid: PPT_ASID; ip: uint64; context: pointer): integer; cdecl;
-var self: TUltimap2Worker;
+var worker: TUltimap2Worker;
   n: TAvgLvlTreeNode;
   e: TRegionInfo;
 
   s: integer;
 begin
-  self:=TUltimap2Worker(context);
+  result:=0;
+
+  worker:=TUltimap2Worker(context);
   //watch for page boundaries
 
-  if (self.lastRegion=nil) or (ip<self.lastRegion^.address) or (ip>=(self.lastRegion^.address+self.lastRegion^.size)) then
+  if (worker.lastRegion=nil) or (ip<worker.lastRegion^.address) or (ip>=(worker.lastRegion^.address+worker.lastRegion^.size)) then
   begin
     e.address:=ip;
-    self.ownerForm.regiontreeMREW.Beginread;
-    n:=self.ownerForm.regiontree.Find(@e);
-    self.ownerForm.regiontreeMREW.endRead;
+    worker.ownerForm.regiontreeMREW.Beginread;
+    n:=worker.ownerForm.regiontree.Find(@e);
+    worker.ownerForm.regiontreeMREW.endRead;
 
 
     if n<>nil then
-      self.lastRegion:=PRegionInfo(n.Data)
+      worker.lastRegion:=PRegionInfo(n.Data)
     else
     begin
       //self.lastRegion:=nil;
-      self.lastregion:=self.addIPBlockToRegionTree(ip);
-      if self.lastregion=nil then
+      worker.lastregion:=worker.addIPBlockToRegionTree(ip);
+      if worker.lastregion=nil then
         exit(-integer(pte_nomap));
     end;
   end;
 
-  if self.lastRegion<>nil then
+  if worker.lastRegion<>nil then
   begin
-    s:=(self.lastRegion^.address+self.lastRegion^.size)-ip;
+    s:=(worker.lastRegion^.address+worker.lastRegion^.size)-ip;
     if s>size then s:=size;
-    CopyMemory(buffer, @self.lastRegion^.memory[ip-self.lastRegion^.address], s);
+    CopyMemory(buffer, @worker.lastRegion^.memory[ip-worker.lastRegion^.address], s);
 
     size:=size-s;
     if size>0 then
@@ -398,7 +441,7 @@ begin
     result:=p;
   end
   else
-    freemem(page);
+    FreeMemAndNil(page);
 end;
 
 function TUltimap2Worker.addIPBlockToRegionTree(IP: QWORD): PRegionInfo;
@@ -415,6 +458,7 @@ begin
   result:=nil;
 
   ownerForm.regiontreeMREW.Beginwrite;
+  endaddress:=$fffffffffffffff;
 
   try
     e.address:=ip;
@@ -567,16 +611,23 @@ begin
   if fromfile then
   begin
     //wait for the fileready event
-    if processFile.WaitFor(timeout)=wrSignaled then
+    if (id=-1) or (processFile.WaitFor(timeout)=wrSignaled) then
     begin
-      ultimap2_lockfile(id);
+      if id<>-1 then
+        ultimap2_lockfile(id);
+
       if fileexists(filename) then
       begin
         if fileexists(filename+'.processing') then   //'shouldn't' happen
           deletefile(filename+'.processing');
 
-        renamefile(filename, filename+'.processing');
-        ultimap2_releasefile(id);
+        if id=-1 then
+          copyfile(filename, filename+'.processing')
+        else
+          renamefile(filename, filename+'.processing');
+
+        if id<>-1 then
+          ultimap2_releasefile(id);
 
         filemap:=TFileMapping.create(filename+'.processing');
 
@@ -604,6 +655,7 @@ var fn: string;
 begin
   if fromfile then
   begin
+    OutputDebugString(inttostr(e.cpunr)+' continueFromData for file');
     if filemap<>nil then
     begin
       fn:=filemap.filename;
@@ -722,29 +774,123 @@ begin
   end;
 end;
 
+procedure TUltimap2Worker.processData(e: TUltimap2DataEvent);
+var
+  insn: pt_insn;
+  tf: TFileStream=nil;
+  i: integer;
+begin
+  OutputDebugString(format('%d: Ultimap2Worker data available. Size=%d',[id, e.size]));
+  try
+    try
+      //process the data between e.Address and e.Address+e.Size
+      totalsize:=e.Size;
+      iptConfig.beginaddress:=pointer(e.Address);
+      iptConfig.endaddress:=pointer(e.Address+e.Size);
+
+      decoder:=pt_insn_alloc_decoder(@iptConfig);
+      if decoder<>nil then
+      begin
+        try
+          pt_insn_set_image(decoder, callbackImage);
+
+          if parseAsText then //create the textfile
+          begin
+            try
+              if FileExists(textFolder+'cpu'+inttostr(e.Cpunr)+'trace.txt') then
+                tf:=TFileStream.Create(textFolder+'cpu'+inttostr(e.Cpunr)+'trace.txt', fmOpenReadWrite or fmShareDenyNone)
+              else
+                tf:=TFileStream.Create(textFolder+'cpu'+inttostr(e.Cpunr)+'trace.txt', fmCreate or fmShareDenyNone)
+            except
+              OutputDebugString('failed creating or opening '+textFolder+'cpu'+inttostr(e.Cpunr)+'trace.txt');
+              tf:=nil
+            end
+          end;
+
+          //scan through this decoder
+
+          i:=0;
+          while (pt_insn_sync_forward(decoder)>=0) and (not terminated) do
+          begin
+            zeromemory(@insn,sizeof(insn));
+            while (pt_insn_next(decoder, @insn, sizeof(insn))>=0) and (not terminated) do
+            begin
+              if parseAsText then
+                parseToStringlist(insn, ts);
+
+              if insn.iclass=ptic_error then break;
+
+
+              handleIP(insn.ip, insn.iclass);
+
+              inc(i);
+              if i>512 then
+              begin
+                pt_insn_get_offset(decoder, @processed);
+
+                i:=0;
+
+
+                if parseAsText and (tf<>nil) then //flush to the file
+                begin
+                  ts.SaveToStream(tf);
+                  ts.clear;
+                end;
+              end;
+
+
+            end;
+
+            if parseAsText then
+            begin
+              ts.add('');
+              ts.add('-----New block-----');
+              ts.add('');
+            end;
+          end;
+        finally
+          pt_insn_free_decoder(decoder);
+
+          if parseAsText and (tf<>nil) then
+          begin
+            if ts.Count>0 then //flush
+            begin
+              ts.SaveToStream(tf);
+              ts.clear;
+            end;
+
+            freeandnil(tf); //close
+          end;
+        end;
+      end;
+
+    finally
+      processed:=totalsize;
+      done:=true;
+      continueFromData(e);
+    end;
+
+    OutputDebugString(format('%d: Ultimap2Worker data processed successfully', [id]));
+  except
+    on e:exception do
+    begin
+      OutputDebugString(format('%d: Ultimap2Worker exception during processing data : %s',[id, e.Message]));
+    end;
+  end;
+end;
+
 procedure TUltimap2Worker.execute;
 var
   e: TUltimap2DataEvent;
 
-  iptConfig: pt_config;
-  decoder: ppt_insn_decoder;
-  callbackImage: PPT_Image;
-  insn: pt_insn;
+
+
   i: integer;
 
-  tf: TFileStream;
-  ts: TStringList;
+
+
 begin
   OutputDebugString(format('%d: Ultimap2Worker launcher',[id]));
-
-  callbackImage:=pt_image_alloc('xxx');
-  pt_image_set_callback(callbackImage,@iptReadMemory,self);
-
-  pt_config_init(@iptConfig);
-  pt_cpu_read(@iptConfig.cpu);
-  pt_cpu_errata(@iptConfig.errata, @iptConfig.cpu);
-
-  tf:=nil;
 
   if parseAsText then
   begin
@@ -758,124 +904,34 @@ begin
     ts:=nil;
 
 
-
   while not terminated do
   begin
 
     if waitForData(250, e) then
     begin
-      OutputDebugString(format('%d: Ultimap2Worker data available. Size=%d',[id, e.size]));
-      try
-        try
-          //process the data between e.Address and e.Address+e.Size
-          totalsize:=e.Size;
-          iptConfig.beginaddress:=pointer(e.Address);
-          iptConfig.endaddress:=pointer(e.Address+e.Size);
+      processData(e);
 
-          decoder:=pt_insn_alloc_decoder(@iptConfig);
-          if decoder<>nil then
-          begin
-            try
-              pt_insn_set_image(decoder, callbackImage);
-
-              if parseAsText then //create the textfile
-              begin
-                try
-                  if FileExists(textFolder+'cpu'+inttostr(e.Cpunr)+'trace.txt') then
-                    tf:=TFileStream.Create(textFolder+'cpu'+inttostr(e.Cpunr)+'trace.txt', fmOpenReadWrite or fmShareDenyNone)
-                  else
-                    tf:=TFileStream.Create(textFolder+'cpu'+inttostr(e.Cpunr)+'trace.txt', fmCreate or fmShareDenyNone)
-                except
-                  OutputDebugString('failed creating or opening '+textFolder+'cpu'+inttostr(e.Cpunr)+'trace.txt');
-                  tf:=nil
-                end
-              end;
-
-              //scan through this decoder
-
-              i:=0;
-              while (pt_insn_sync_forward(decoder)>=0) and (not terminated) do
-              begin
-                while (pt_insn_next(decoder, @insn, sizeof(insn))>=0) and (not terminated) do
-                begin
-                  if parseAsText then
-                    parseToStringlist(insn, ts);
-
-                  if insn.iclass=ptic_error then break;
-
-
-                  handleIP(insn.ip, insn.iclass);
-
-                  inc(i);
-                  if i>512 then
-                  begin
-                    pt_insn_get_offset(decoder, @processed);
-
-                    i:=0;
-
-
-                    if parseAsText and (tf<>nil) then //flush to the file
-                    begin
-                      ts.SaveToStream(tf);
-                      ts.clear;
-                    end;
-                  end;
-
-
-                end;
-
-                if parseAsText then
-                begin
-                  ts.add('');
-                  ts.add('-----New block-----');
-                  ts.add('');
-                end;
-              end;
-            finally
-              pt_insn_free_decoder(decoder);
-
-              if parseAsText and (tf<>nil) then
-              begin
-                if ts.Count>0 then //flush
-                begin
-                  ts.SaveToStream(tf);
-                  ts.clear;
-                end;
-
-                freeandnil(tf); //close
-              end;
-            end;
-          end;
-
-        finally
-          processed:=totalsize;
-          done:=true;
-          continueFromData(e);
-        end;
-
-        OutputDebugString(format('%d: Ultimap2Worker data processed successfully', [id]));
-      except
-        on e:exception do
-        begin
-          OutputDebugString(format('%d: Ultimap2Worker exception during processing data : %s',[id, e.Message]));
-        end;
-      end;
 
       OutputDebugString(format('%d: Ultimap2Worker waiting for new data', [id]));
     end else sleep(1);
   end;
 
-  pt_image_free(callbackImage);
+  done:=true;
+
+
+end;
+
+destructor TUltimap2Worker.destroy;
+begin
+  if callbackImage<>nil then
+    pt_image_free(callbackImage);
 
   if ts<>nil then
     freeandnil(ts);
 
   if disassembler<>nil then
     freeandnil(disassembler);
-end;
 
-destructor TUltimap2Worker.destroy;
-begin
   Terminate;
   if processFile<>nil then
     processFile.SetEvent;
@@ -885,11 +941,22 @@ begin
   inherited destroy;
 end;
 
-constructor TUltimap2Worker.create(CreateSuspended: boolean);
+constructor TUltimap2Worker.create(CreateSuspended: boolean; cpuid: integer; owner: TfrmUltimap2);
 begin
   inherited create(createsuspended);
 
+  id:=cpuid;
+  ownerform:=owner;
+
   processFile:=TEvent.Create(nil,false,false,'');
+
+  callbackImage:=pt_image_alloc(pchar('cpu'+inttostr(id)));
+  pt_image_set_callback(callbackImage,@iptReadMemory,self);
+
+  pt_config_init(@iptConfig);
+  pt_cpu_read(@iptConfig.cpu);
+  pt_cpu_errata(@iptConfig.errata, @iptConfig.cpu);
+
 end;
 
 procedure TUltimap2FilterWorker.FilterExecuted(ri: TRegionInfo);  //removes executed entries
@@ -1211,7 +1278,7 @@ begin
 
     closehandle(filterSemaphore);
     freeandnil(queueCS);
-    freemem(workqueue);
+    FreeMemAndNil(workqueue);
     OutputDebugString('Filter thread cleanup done');
   end;
 
@@ -1251,17 +1318,17 @@ begin
   begin
     if r^.info<>nil then
     begin
-      freemem(r^.info);
-      r^.info:=nil;
+      FreeMemAndNil(r^.info);
+
     end;
 
     if r^.memory<>nil then
     begin
-      freemem(r^.memory);
-      r^.memory:=nil;
+      FreeMemAndNil(r^.memory);
+
     end;
 
-    freemem(r);
+    FreeMemAndNil(r);
   end;
 end;
 
@@ -1285,7 +1352,7 @@ begin
   lblBuffersPerCPU.enabled:=state;
   edtBufSize.enabled:=state;
   lblKB.enabled:=state;
-  rbLogToFolder.enabled:=false;
+  rbLogToFolder.enabled:=state;
 
   if state then
   begin
@@ -1320,10 +1387,15 @@ var i:integer;
 begin
   OutputDebugString('TfrmUltimap2.FlushResults');
   ultimap2_resetTraceSize;
+
+  OutputDebugString('1');
   ultimap2_flush;
+
+  OutputDebugString('2');
 
   if rbLogToFolder.checked and (state=rsRecording) then
   begin
+    OutputDebugString('3');
     if cbPauseTargetWhileProcessing.checked then
     begin
       advancedoptions.Pausebutton.down := True;
@@ -1339,6 +1411,8 @@ begin
       workers[i].processFile.SetEvent;
     end;
 
+    OutputDebugString('4');
+
 
     btnShowResults.enabled:=false;
     btnRecordPause.enabled:=false;
@@ -1347,20 +1421,34 @@ begin
 
     PostProcessingFilter:=f;
     state:=rsProcessing;
+
+
     if f<>foNone then
+    begin
+      OutputDebugString('5');
       FilterGUI(false);
+      OutputDebugString('6');
+    end;
+    OutputDebugString('7');
   end
   else
   begin
 
+    OutputDebugString('8');
     //flush only returns after all data has been handled, or the data has already been handled by the file workers
     if f<>foNone then
+    begin
+      OutputDebugString('9');
       Filter(f);
+      OutputDebugString('10');
+    end;
+    OutputDebugString('11');
   end;
 end;
 
 
 procedure TfrmUltimap2.setState(state: TRecordState);
+var boxsize: integer;
 begin
   tProcessor.enabled:=false;
 
@@ -1390,6 +1478,13 @@ begin
       panel1.color:=$ff9900;
     end;
   end;
+
+  boxsize:=64;
+  boxsize:=max(boxsize, label1.width+4);
+  boxsize:=max(boxsize, label1.height+4);
+
+  panel1.Width:=boxsize;
+  panel1.Height:=boxsize;
 end;
 
 procedure TfrmUltimap2.cleanup;
@@ -1451,10 +1546,12 @@ var
   cpuid14_0: TCPUIDResult;
   cpuid14_1: TCPUIDResult;
 begin
+  OutputDebugString('tbRecordPauseChange click');
   if state=rsProcessing then exit;
 
     //if ssCtrl in GetKeyShiftState then
-    //  debugmode:=true;
+   //   debugmode:=true;
+  try
 
     if ((ultimap2Initialized=0) or (processid<>ultimap2Initialized)) then
     begin
@@ -1542,19 +1639,27 @@ begin
 
       //still here so everything seems alright.
       //turn off the config GUI
+
+      OutputDebugString('Disabling config gui');
+
       disableConfigGUI;
 
       ultimap2Initialized:=processid;
 
-      regiontree:=TAvgLvlTree.CreateObjectCompare(@RegionCompare);
-      regiontreeMREW:=TMultiReadExclusiveWriteSynchronizer.Create;
+
+      OutputDebugString('Initializing libIptInit');
+      if not libIptInit then raise exception.create(rsFailureLoadingLibipt);
+
 
       //launch worker threads
+      OutputDebugString('Creating '+inttostr(cpucount)+' workers');
+
       setlength(workers, CPUCount);
       for i:=0 to length(workers)-1 do
       begin
-        workers[i]:=TUltimap2Worker.Create(true);
-        workers[i].id:=i;
+        OutputDebugString('Creating worker '+inttostr(i));
+
+        workers[i]:=TUltimap2Worker.Create(true, i, self);
         workers[i].fromFile:=rbLogToFolder.Checked;
         workers[i].Filename:=Utf8ToAnsi(deTargetFolder.Directory);
         if workers[i].Filename<>'' then
@@ -1571,13 +1676,14 @@ begin
         if (workers[i].textFolder<>'') and (workers[i].textFolder[length(workers[i].textFolder)]<>PathDelim) then
           workers[i].textFolder:=workers[i].textFolder+PathDelim;
 
-        workers[i].ownerForm:=self;
+        OutputDebugString('Done creating worker '+inttostr(i));
       end;
 
 
 
       if length(ranges)>0 then
       begin
+        OutputDebugString('Reading the range memory');
         for i:=0 to length(ranges)-1 do
         begin
           getmem(p, sizeof(TRegionInfo));
@@ -1602,7 +1708,9 @@ begin
       end
       else
       begin
-        getexecutablememoryregionsfromregion(0, qword($ffffffffffffffff), regions);
+        OutputDebugString('Reading the executable memory');
+
+        getexecutablememoryregionsfromregion(0, qword($7fffffffffffffff), regions); //only 7fffffffffffffff as this only records usermode (can be changed)
         for i:=0 to length(regions)-1 do
         begin
           getmem(p, sizeof(TRegionInfo));
@@ -1627,18 +1735,44 @@ begin
       //start the recording
 
 
-      if not libIptInit then raise exception.create(rsFailureLoadingLibipt);
+
+
+
+
+      OutputDebugString('Initializing DBK32');
       DBK32Initialize;
 
       if not debugmode then
       begin
+
+        if (length(ranges)>0) and (WindowsVersion>=wv10) and (cbNoInterrupts.checked=false) then
+        begin
+          {$ifndef NOVMX}
+          NeedsDBVM(rsRangesNeedDBVMInWindows10);
+          dbvm_ultimap2_hideRangeUsage;
+          {$else}
+          if messagedlg('It is recommended to build in release mode or with NOVMX disabled so that DBVM can be launched at this point. '+
+                     'Not doing so will almost surely BSOD you as soon as a performance monitor interrupt triggers(buffer full).'+#13#10+
+                     'Alternatively, you could find hal!KdDebuggerNotPresent (NOT nt!KdDebuggerNotPresent which is what hal!KdDebuggerNotPresent points at) and NULL it'#13#10+
+                     'Continue?', mtWarning, [mbyes,mbno],0)<>mryes then exit;
+          {$endif}
+        end;
+
+
+
+        OutputDebugString('calling ultimap2()');
         if rbLogToFolder.Checked then
-          ultimap2(processid, bsize, deTargetFolder.Directory, ranges)
+          ultimap2(ifthen(cbTraceAllProcesses.checked,0,processid), bsize, deTargetFolder.Directory, ranges, cbNoInterrupts.checked, cbUsermode.checked, cbKernelmode.checked)
         else
-          ultimap2(processid, bsize, '', ranges);
+          ultimap2(ifthen(cbTraceAllProcesses.checked,0,processid), bsize, '', ranges, cbNoInterrupts.checked, cbUsermode.checked, cbKernelmode.checked);
       end;
 
-      FilterGUI(true);
+      if cbTraceAllProcesses.checked then
+        FilterGUI(false)
+      else
+        FilterGUI(true);
+
+      outputdebugstring('Starting the workers');
 
       for i:=0 to length(workers)-1 do
         workers[i].start;
@@ -1657,7 +1791,14 @@ begin
       if state=rsRecording then
       begin
         ultimap2_pause;
-        FlushResults(foNone);
+
+        if cbTraceAllProcesses.checked then
+        begin
+          ultimap2_resetTraceSize;
+          ultimap2_flush;
+        end
+        else
+          FlushResults(foNone);
 
 
         if rbRuntimeParsing.checked then
@@ -1665,6 +1806,11 @@ begin
       end;
     end;
 
+
+  except
+    on e: exception do
+      messagedlg(e.message,mtError,[mbOK],0);
+  end;
 end;
 
 procedure TfrmUltimap2.tProcessorTimer(Sender: TObject);
@@ -1698,11 +1844,9 @@ end;
 
 procedure TfrmUltimap2.FormDestroy(Sender: TObject);
 var
-  x: TWindowPosArray;
   reg: tregistry;
 begin
-  setlength(x,0);
-  SaveFormPosition(self, x);
+  SaveFormPosition(self);
 
   reg:=TRegistry.Create;
   try
@@ -1774,7 +1918,7 @@ begin
   if validlist<>nil then
   begin
     data:=validlist[item.index];
-    item.caption:=inttohex(data^.address,8);
+    item.caption:=symhandler.getNameFromAddress(data^.address);
 
     if data^.byteInfo^.count=255 then
       item.SubItems.Add('>=255')
@@ -1810,6 +1954,10 @@ var
   cpuid14_1: TCPUIDResult;
   d: boolean;
 begin
+  OutputDebugString('Ultimap 2 window created');
+  regiontree:=TAvgLvlTree.CreateObjectCompare(@RegionCompare);
+  regiontreeMREW:=TMultiReadExclusiveWriteSynchronizer.Create;
+
   maxrangecount:=0;
 
   r:=CPUID(0);
@@ -2108,6 +2256,28 @@ begin
   sl.free;
 end;
 
+procedure TfrmUltimap2.MenuItem4Click(Sender: TObject);
+begin
+  close;
+end;
+
+procedure TfrmUltimap2.MenuItem5Click(Sender: TObject);
+var
+  worker: TUltimap2Worker;
+  e: TUltimap2DataEvent;
+begin
+  if not libIptInit then raise exception.create(rsFailureLoadingLibipt);
+
+  if OpenDialog1.execute then
+  begin
+    worker:=TUltimap2Worker.create(true,-1, self);
+    worker.Filename:=opendialog1.filename;
+    worker.fromFile:=true;
+    worker.waitForData(0,e);
+    worker.processData(e);
+  end;
+end;
+
 procedure TfrmUltimap2.miCloseClick(Sender: TObject);
 begin
   close;
@@ -2131,8 +2301,8 @@ begin
       n:=validList.GetNodeAtIndex(i);
       if (n<>nil) and (n.Data<>nil) then
       begin
-        freemem(n.data);
-        n.data:=nil
+        FreeMemAndNil(n.data);
+
       end;
     end;
     validlist.Clear;
@@ -2140,7 +2310,24 @@ begin
   end;
 end;
 
-function TfrmUltimap2.IsMatchingAddress(address: ptruint): boolean;
+function TfrmUltimap2.getMatchCount: integer;
+begin
+  result:=0;
+  if (self<>nil) and (regiontreemrew<>nil) then
+  begin
+    regiontreemrew.Beginread;
+    try
+      if validlist<>nil then
+      begin
+        result:=validlist.Count;
+      end;
+    finally
+      regiontreemrew.Endread;
+    end;
+  end;
+end;
+
+function TfrmUltimap2.IsMatchingAddress(address: ptruint; count: pinteger=nil): boolean;
 var
   s: TValidEntry;
   r: PValidEntry;
@@ -2162,6 +2349,9 @@ begin
           begin
             r:=n.Data;
             result:=(r^.byteInfo^.flags and bifInvalidated)=0;
+
+            if result and (count<>nil) then
+              count^:=r^.byteInfo^.count;
           end;
         end;
       finally
@@ -2236,6 +2426,26 @@ begin
   deTextOut.ButtonOnlyWhenFocused:=false;
 end;
 
+procedure TfrmUltimap2.cbTraceAllProcessesChange(Sender: TObject);
+begin
+  if cbTraceAllProcesses.checked then
+  begin
+    rbLogToFolder.checked:=true;
+    rbRuntimeParsing.enabled:=false;
+    cbAutoProcess.checked:=false;
+    cbAutoProcess.Enabled:=false;
+    cbPauseTargetWhileProcessing.enabled:=false;
+    cbPauseTargetWhileProcessing.checked:=false;
+    cbDontDeleteTraceFiles.checked:=true;
+
+  end
+  else
+  begin
+    rbRuntimeParsing.enabled:=true;
+    cbAutoProcess.enabled:=true;
+  end;
+end;
+
 procedure TfrmUltimap2.cbTraceIntervalChange(Sender: TObject);
 begin
   if cbTraceInterval.checked then
@@ -2303,6 +2513,47 @@ begin
   lbRange.clear;
 end;
 
+procedure TfrmUltimap2.miRemoveHotkeyClick(Sender: TObject);
+var
+  i: integer;
+begin
+  if pmSetHotkey.PopupComponent<>nil then
+  begin
+    i:=pmSetHotkey.PopupComponent.Tag;
+    if FilterHotkey[i]<>nil then
+      FreeAndNil(FilterHotkey[i]);
+  end;
+end;
+
+procedure TfrmUltimap2.miSetHotkeyClick(Sender: TObject);
+var
+  f: TfrmHotkeyEx;
+  i: integer;
+begin
+  if pmSetHotkey.PopupComponent<>nil then
+  begin
+    i:=pmSetHotkey.PopupComponent.Tag;
+
+    f:=TfrmHotkeyEx.Create(self);
+
+    if FilterHotkey[i]<>nil then
+    begin
+      f.newhotkey:=filterhotkey[i].keys;
+      f.edtHotkey.text:=ConvertKeyComboToString(f.newhotkey);
+    end;
+
+    if (f.showmodal = mrok) and (f.newhotkey[0]<>0) then
+    begin
+      if FilterHotkey[i]=nil then
+        FilterHotkey[i]:=TGenericHotkey.create(TButton(pmSetHotkey.PopupComponent).OnClick, f.newhotkey)
+      else
+        FilterHotkey[i].keys:=f.newhotkey;
+    end;
+
+    f.free;
+  end;
+end;
+
 procedure TfrmUltimap2.Panel5Click(Sender: TObject);
 begin
 
@@ -2312,6 +2563,29 @@ procedure TfrmUltimap2.pmRangeOptionsPopup(Sender: TObject);
 begin
   miRangeDeleteSelected.enabled:=lbrange.SelCount>0;
   miRangeDeleteAll.enabled:=lbrange.count>0;
+end;
+
+
+procedure TfrmUltimap2.pmSetHotkeyPopup(Sender: TObject);
+var i: integer;
+begin
+  if pmSetHotkey.PopupComponent<>nil then
+  begin
+    i:=pmSetHotkey.PopupComponent.Tag;
+
+   // showmessage(pmSetHotkey.PopupComponent.Name);
+
+    miSetHotkey.enabled:=FilterHotkey[i]=nil;
+    miRemoveHotkey.enabled:=not miSetHotkey.enabled;
+
+    if miRemoveHotkey.enabled then
+      miRemoveHotkey.Caption:=Format(rsRemoveHotkey, [ConvertKeyComboToString(FilterHotkey[i].keys)]);
+  end
+  else
+  begin
+    miSetHotkey.enabled:=false;
+    miRemoveHotkey.enabled:=false;
+  end;
 end;
 
 procedure TfrmUltimap2.rbLogToFolderChange(Sender: TObject);
@@ -2329,13 +2603,17 @@ var
   i: integer;
   totalprocessed, totalsize: qword;
 begin
+  OutputDebugString('Activator timer');
   done:=true;
   totalprocessed:=0;
   totalsize:=0;
   for i:=0 to length(workers)-1 do
   begin
     if not workers[i].done then
+    begin
       done:=false;
+      OutputDebugString('worker '+inttostr(i)+' is not done yet');
+    end;
 
     if workers[i].totalsize<>0 then
     begin
@@ -2377,7 +2655,55 @@ begin
     state:=rsStopped;
 end;
 
+//lua
 
+function frmUltimap2_isMatchingAddress(L: PLua_state): integer; cdecl;
+var
+  f: TfrmUltimap2;
+  r: boolean;
+  count: integer;
+begin
+  result:=0;
+  f:=TfrmUltimap2(luaclass_getClassObject(L));
+  if lua_gettop(L)>=1 then
+  begin
+    r:=f.IsMatchingAddress(lua_tointeger(L,1), @count);
+    lua_pushboolean(L,r);
+
+    if r then
+    begin
+      lua_pushinteger(L,count);
+      result:=2;
+    end
+    else
+      result:=1;
+  end;
+end;
+
+function lua_getUltimap2(L: PLua_state): integer; cdecl;
+begin
+  luaclass_newClass(L,frmUltimap2);
+  result:=1;
+end;
+
+procedure frmUltimap2_addMetaData(L: PLua_state; metatable: integer; userdata: integer );
+begin
+  customform_addMetaData(L, metatable, userdata);
+  luaclass_addClassFunctionToTable(L, metatable, userdata, 'isMatchingAddress', @frmUltimap2_isMatchingAddress);
+  luaclass_addClassFunctionToTable(L, metatable, userdata, 'isInList', @frmUltimap2_isMatchingAddress);
+
+end;
+
+procedure initializeLuaUltimap2;
+begin
+  lua_register(LuaVM, 'getUltimap2', @lua_getUltimap2);
+end;
+
+
+initialization
+  registerclass(TfrmUltimap2);
+
+  luaclass_register(TfrmUltimap2, @frmUltimap2_addMetaData);
 
 end.
 

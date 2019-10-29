@@ -1,4 +1,4 @@
-#pragma warning( disable: 4103)
+#pragma warning( disable: 4100 4101 4103)
 
 
 #include "IOPLDispatcher.h"
@@ -21,16 +21,15 @@
 #include "ultimap.h"
 #include "ultimap2.h"
 
+
 UINT64 PhysicalMemoryRanges=0; //initialized once, and used thereafter. If the user adds/removes ram at runtime, screw him and make him the reload the driver
 UINT64 PhysicalMemoryRangesListSize=0;
 
 #if (NTDDI_VERSION >= NTDDI_VISTA)
 PVOID DRMHandle = NULL;
 PEPROCESS DRMProcess = NULL;
+PEPROCESS DRMProcess2 = NULL;
 #endif
-
-PSERVICE_DESCRIPTOR_TABLE KeServiceDescriptorTableShadow=NULL;
-PSERVICE_DESCRIPTOR_TABLE KeServiceDescriptorTable=NULL;
 
 typedef PCHAR (*GET_PROCESS_IMAGE_NAME) (PEPROCESS Process); 
 GET_PROCESS_IMAGE_NAME PsGetProcessImageFileName; 
@@ -53,6 +52,9 @@ VOID GetCPUIDS_all(PCPULISTFILLSTRUCT p)
 	}
 }
 */
+
+NTSYSAPI NTSTATUS NTAPI ZwQueryInformationProcess(IN HANDLE ProcessHandle, IN PROCESSINFOCLASS ProcessInformationClass, OUT PVOID ProcessInformation, IN ULONG ProcessInformationLength, OUT PULONG ReturnLength OPTIONAL);
+
 
 
 void mykapc2(PKAPC Apc, PKNORMAL_ROUTINE NormalRoutine, PVOID NormalContext, PVOID SystemArgument1, PVOID SystemArgument2)
@@ -178,9 +180,8 @@ OB_PREOP_CALLBACK_STATUS ThreadPreCallback(PVOID RegistrationContext, POB_PRE_OP
 		return OB_PREOP_SUCCESS;
 
 	if (OperationInformation->ObjectType == *PsThreadType)
-	{
-
-		if (PsGetProcessId(DRMProcess) == PsGetThreadProcessId(OperationInformation->Object))
+	{		
+		if ((PsGetProcessId(DRMProcess) == PsGetThreadProcessId(OperationInformation->Object)) || ((DRMProcess2) && (PsGetProcessId(DRMProcess2) == PsGetThreadProcessId(OperationInformation->Object))))
 		{
 			//probably block it
 
@@ -228,7 +229,7 @@ OB_PREOP_CALLBACK_STATUS ProcessPreCallback(PVOID RegistrationContext, POB_PRE_O
 
 	if (OperationInformation->ObjectType == *PsProcessType)
 	{
-		if (OperationInformation->Object == DRMProcess)
+		if ((OperationInformation->Object == DRMProcess) || (OperationInformation->Object == DRMProcess2))
 		{
 			//probably block it
 
@@ -319,18 +320,18 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 		IoControlCode=Irp->Flags;
 		
 	//DbgPrint("DispatchIoctl. IoControlCode=%x\n", IoControlCode);
-/*
-	sedebugprivUID.LowPart=SE_DEBUG_PRIVILEGE;
+#ifdef TOBESIGNED
+    sedebugprivUID.LowPart=SE_DEBUG_PRIVILEGE;
 	sedebugprivUID.HighPart=0;
-
 	
 	if (SeSinglePrivilegeCheck(sedebugprivUID, UserMode)==FALSE)
 	{
 		DbgPrint("DispatchIoctl called by a process without SeDebugPrivilege");
 		return STATUS_UNSUCCESSFUL;
 	}
-	*/
+#endif
 	
+
 	
     switch(IoControlCode)
     {
@@ -347,7 +348,7 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 
 				pinp=Irp->AssociatedIrp.SystemBuffer;
 
-				ntStatus=ReadProcessMemory((DWORD)pinp->processid,NULL,(PVOID)pinp->startaddress,pinp->bytestoread,pinp) ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
+				ntStatus=ReadProcessMemory((DWORD)pinp->processid,NULL,(PVOID)(UINT_PTR)pinp->startaddress,pinp->bytestoread,pinp) ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
 			}
 			__except(1)
 			{
@@ -369,7 +370,7 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 
 				DbgPrint("sizeof(inp)=%d\n",sizeof(inp));
 				pinp=Irp->AssociatedIrp.SystemBuffer;
-				ntStatus=WriteProcessMemory((DWORD)pinp->processid,NULL,(PVOID)pinp->startaddress,pinp->bytestowrite,(PVOID)((UINT_PTR)pinp+sizeof(inp))) ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
+				ntStatus=WriteProcessMemory((DWORD)pinp->processid,NULL,(PVOID)(UINT_PTR)pinp->startaddress,pinp->bytestowrite,(PVOID)((UINT_PTR)pinp+sizeof(inp))) ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
 			}
 			__except(1)
 			{
@@ -384,7 +385,7 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 
 		case IOCTL_CE_OPENPROCESS:
 			{					
-				PEPROCESS selectedprocess;
+				PEPROCESS selectedprocess = NULL;
 				ULONG processid=*(PULONG)Irp->AssociatedIrp.SystemBuffer;
 				HANDLE ProcessHandle = GetHandleForProcessID((HANDLE)processid);
 				struct out
@@ -428,6 +429,11 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 					//DbgPrint("ProcessHandle=%x", (int)ProcessHandle);
 					POutput->Special = 1;					
 				}
+
+				if (selectedprocess)
+				{
+					ObDereferenceObject(selectedprocess);
+				}
 				
 				POutput->h=(UINT64)ProcessHandle;
 				break;
@@ -445,7 +451,7 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 				ntStatus=STATUS_SUCCESS;
 
 				ClientID.UniqueProcess=0;
-				ClientID.UniqueThread=(HANDLE)(UINT64)*(PULONG)Irp->AssociatedIrp.SystemBuffer;
+				ClientID.UniqueThread=(HANDLE)(UINT_PTR)*(PULONG)Irp->AssociatedIrp.SystemBuffer;
 				ThreadHandle=0;
 
 				__try
@@ -518,7 +524,7 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 
 				__try
 				{
-					ntStatus = GetMemoryRegionData((DWORD)PInputBuf->ProcessID, NULL, (PVOID)(PInputBuf->StartAddress), &(POutputBuf->protection), &length, &BaseAddress);
+					ntStatus = GetMemoryRegionData((DWORD)PInputBuf->ProcessID, NULL, (PVOID)(UINT_PTR)(PInputBuf->StartAddress), &(POutputBuf->protection), &length, &BaseAddress);
 				}
 				__except(1)
 				{
@@ -547,17 +553,16 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 			{
 				UNICODE_STRING test;
 				PVOID x;
-				RtlInitUnicodeString(&test, L"NtProtectVirtualMemory");
-				x = MmGetSystemRoutineAddress(&test);
-				if (x)
-				{
-					DbgPrint("yes %p", x);
-				}
-					DbgPrint("no");
+				QWORD a, b;
 
+				_disable();
+				a = __rdtsc();
+				b = __rdtsc();
 
+				_enable();
 
 				
+				DbgPrint("%d\n", (int)(b - a));				
 				break;
 			}
 
@@ -646,7 +651,7 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 
 					UCHAR* pinp2;
 
-					UINT_PTR length;
+					SIZE_T length;
 					PHYSICAL_ADDRESS	viewBase;
 					UINT_PTR offset;
 					UINT_PTR toread;
@@ -700,6 +705,7 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 
 				PEPROCESS selectedprocess;
 				PHYSICAL_ADDRESS physical;
+				physical.QuadPart = 0;
 
 				ntStatus=STATUS_SUCCESS;
 				pinp=Irp->AssociatedIrp.SystemBuffer;
@@ -709,7 +715,7 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 				__try
 				{
 					//switch to the selected process
-					if (PsLookupProcessByProcessId((PVOID)(UINT64)(pinp->ProcessID),&selectedprocess)==STATUS_SUCCESS)	
+					if (PsLookupProcessByProcessId((PVOID)(UINT_PTR)(pinp->ProcessID),&selectedprocess)==STATUS_SUCCESS)
 					{
 						KAPC_STATE apc_state;
 						RtlZeroMemory(&apc_state,sizeof(apc_state));					
@@ -717,7 +723,7 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
                  
 						__try
 						{
-							physical=MmGetPhysicalAddress((PVOID)pinp->BaseAddress);
+							physical=MmGetPhysicalAddress((PVOID)(UINT_PTR)pinp->BaseAddress);
 						}
 						__finally
 						{
@@ -792,41 +798,8 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 			
 		case IOCTL_CE_GETSDTADDRESS:
 			{
-#ifdef AMD64
-				DbgPrint("I have no idea what the sdt is in 64-bit\n");
+				DbgPrint("Obsolete\n");
 				ntStatus=STATUS_UNSUCCESSFUL;
-#else
-				struct input
-				{
-					int table; //0=SDT, 1=SSDT
-				  	int nr;	
-				} *pinp;
-				struct output
-				{
-					ULONG address;
-					UCHAR paramcount;
-				} *poutp;
-				int table;
-				int nr;
-				pinp=Irp->AssociatedIrp.SystemBuffer;
-				table=pinp->table;
-				nr=pinp->nr;
-				poutp=Irp->AssociatedIrp.SystemBuffer;
-
-
-				if (table==0)
-				{
-					poutp->address=(ULONG)(KeServiceDescriptorTable->ServiceTable[nr]);
-					poutp->paramcount=(UCHAR)(KeServiceDescriptorTable->ArgumentTable[nr]);
-				}
-				else if (table==1)
-				{
-					poutp->address=(ULONG)(KeServiceDescriptorTableShadow->ServiceTable[nr]);
-					poutp->paramcount=(UCHAR)(KeServiceDescriptorTableShadow->ArgumentTable[nr]);
-				}
-
-				ntStatus=STATUS_SUCCESS;
-#endif
 				break;
 			}
 			
@@ -869,7 +842,7 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 				ntStatus=STATUS_SUCCESS;
 
 				//switch context to the selected process.  (processid is stored in the systembuffer)
-				if (PsLookupProcessByProcessId((PVOID)(UINT64)(*(ULONG*)Irp->AssociatedIrp.SystemBuffer),&selectedprocess)==STATUS_SUCCESS)	
+				if (PsLookupProcessByProcessId((PVOID)(UINT_PTR)(*(ULONG*)Irp->AssociatedIrp.SystemBuffer),&selectedprocess)==STATUS_SUCCESS)
 				{
 					__try
 					{
@@ -910,8 +883,7 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 		case IOCTL_CE_GETSDT:
 			{
 				//returns the address of KeServiceDescriptorTable
-				ntStatus=STATUS_SUCCESS;
-				*(UINT64*)Irp->AssociatedIrp.SystemBuffer=(UINT64)KeServiceDescriptorTable;
+				ntStatus = STATUS_UNSUCCESSFUL;
 				break;
 			}	
 			
@@ -953,42 +925,12 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 				pinp=Irp->AssociatedIrp.SystemBuffer;
 				DbgPrint("IOCTL_CE_LAUNCHDBVM\n");
 
+				initializeDBVM((PCWSTR)(UINT_PTR)pinp->dbvmimgpath);
+
 				if (pinp->cpuid == 0xffffffff)
-				{
-					DbgPrint("cpuid=0xffffffff\n");
-					forEachCpuPassive(vmxoffload_passive, (UINT_PTR)pinp->dbvmimgpath);
-				}
+					forEachCpu(vmxoffload_dpc, NULL, NULL, NULL, vmxoffload_override);
 				else
-				{					
-					KAFFINITY newaffinity=(KAFFINITY)(1 << pinp->cpuid);					
-					//offload just for this cpu
-
-#if (NTDDI_VERSION >= NTDDI_VISTA)					
-					KAFFINITY oldaffinity;
-					oldaffinity = KeSetSystemAffinityThreadEx(newaffinity);
-#else
-					//XP and earlier (this routine is not called often, only when the user asks explicitly
-					{
-						LARGE_INTEGER delay;
-						delay.QuadPart = -50; //short wait just to be sure... (the docs do not say that a switch happens imeadiatly for the no Ex version)
-
-						KeSetSystemAffinityThread(newaffinity);
-						KeDelayExecutionThread(UserMode, FALSE, &delay);
-					}
-#endif
-
-					DbgPrint("cpuid=%d\n", pinp->cpuid);
-		
-					vmxoffload_passive((UINT_PTR)pinp->dbvmimgpath);
-#if (NTDDI_VERSION >= NTDDI_VISTA)
-					KeRevertToUserAffinityThreadEx(oldaffinity);
-#endif
-				}
-				//vmxoffload_passive((UINT_PTR)pinp->dbvmimgpath);
-
-				
-
-				//vmxoffload((PCWSTR)pinp->dbvmimgpath);
+					forOneCpu((CCHAR)pinp->cpuid, vmxoffload_dpc, NULL, NULL, NULL, vmxoffload_override);
 
 				DbgPrint("Returned from vmxoffload()\n");
 				break;
@@ -998,7 +940,7 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 		case IOCTL_CE_HOOKINTS: //hooks the DEBUG interrupts
 			{
 				DbgPrint("IOCTL_CE_HOOKINTS\n");
-				forEachCpu(debugger_initHookForCurrentCPU_DPC, NULL, NULL, NULL);
+				forEachCpu(debugger_initHookForCurrentCPU_DPC, NULL, NULL, NULL, NULL);
 				ntStatus=STATUS_SUCCESS;
 
 				/*
@@ -1025,7 +967,7 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 				pinp=Irp->AssociatedIrp.SystemBuffer;
 
 
-				inthook_HookInterrupt((unsigned char)(pinp->interruptnumber), (int)pinp->newCS, (ULONG_PTR)pinp->newRIP, (PJUMPBACK)(pinp->addressofjumpback));
+				inthook_HookInterrupt((unsigned char)(pinp->interruptnumber), (int)pinp->newCS, (ULONG_PTR)pinp->newRIP, (PJUMPBACK)(UINT_PTR)(pinp->addressofjumpback));
 				DbgPrint("After the hook\n");
 				ntStatus=STATUS_SUCCESS;
 				break;
@@ -1087,9 +1029,17 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 		case IOCTL_CE_STARTPROCESSWATCH:
 			{
 				NTSTATUS r = STATUS_SUCCESS;
+				DbgPrint("IOCTL_CE_STARTPROCESSWATCH\n");
 
 				ProcessWatcherOpensHandles = *(char *)Irp->AssociatedIrp.SystemBuffer != 0;
-				
+
+				if (CreateProcessNotifyRoutineEnabled && WatcherProcess)
+				{	
+					ntStatus = STATUS_UNSUCCESSFUL;
+					break;
+				}							
+
+				//still here
 				ExAcquireResourceExclusiveLite(&ProcesslistR, TRUE);				
 				ProcessEventCount=0;				
 				ExReleaseResourceLite(&ProcesslistR);
@@ -1097,12 +1047,7 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 				//DbgPrint("IOCTL_CE_STARTPROCESSWATCH\n");
 
 				CleanProcessList();
-				if (WatcherProcess == NULL)
-				{
-					WatcherProcess = PsGetCurrentProcess();
-					//r = ObOpenObjectByPointer(WatcherProcess, OBJ_KERNEL_HANDLE, NULL, PROCESS_ALL_ACCESS, *PsProcessType, KernelMode, &WatcherHandle);
-			
-				}
+
 					
 				
 				if ((r == STATUS_SUCCESS) && (CreateProcessNotifyRoutineEnabled == FALSE))
@@ -1227,7 +1172,7 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 				if (PsSuspendProcess)
 				{
 					PEPROCESS selectedprocess;
-					if (PsLookupProcessByProcessId((PVOID)(UINT64)(inp->processid), &selectedprocess) == STATUS_SUCCESS)
+					if (PsLookupProcessByProcessId((PVOID)(UINT_PTR)(inp->processid), &selectedprocess) == STATUS_SUCCESS)
 					{
 						ntStatus = PsSuspendProcess(selectedprocess);
 						ObDereferenceObject(selectedprocess);
@@ -1257,7 +1202,7 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 				if (PsResumeProcess)
 				{
 					PEPROCESS selectedprocess;
-					if (PsLookupProcessByProcessId((PVOID)(UINT64)(inp->processid), &selectedprocess) == STATUS_SUCCESS)
+					if (PsLookupProcessByProcessId((PVOID)(UINT_PTR)(inp->processid), &selectedprocess) == STATUS_SUCCESS)
 					{
 						ntStatus = PsResumeProcess(selectedprocess);
 						ObDereferenceObject(selectedprocess);
@@ -1292,7 +1237,7 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 				RegionSize=(SIZE_T)(inp->Size);
 
 
-				if (PsLookupProcessByProcessId((PVOID)(UINT64)(inp->ProcessID),&selectedprocess)==STATUS_SUCCESS)	
+				if (PsLookupProcessByProcessId((PVOID)(UINT_PTR)(inp->ProcessID),&selectedprocess)==STATUS_SUCCESS)
 				{
 					__try
 					{
@@ -1387,7 +1332,7 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 
 				inp = Irp->AssociatedIrp.SystemBuffer;
 
-				ExFreePool((PVOID)inp->Address);
+				ExFreePool((PVOID)(UINT_PTR)inp->Address);
 
 				ntStatus = STATUS_SUCCESS;
 
@@ -1426,7 +1371,7 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 				{
 					//switch
 					DbgPrint("From PID %d\n", inp->FromPID);
-					if (PsLookupProcessByProcessId((PVOID)(UINT64)(inp->FromPID), &selectedprocess) == STATUS_SUCCESS)
+					if (PsLookupProcessByProcessId((PVOID)(UINT_PTR)(inp->FromPID), &selectedprocess) == STATUS_SUCCESS)
 					{
 						__try
 						{
@@ -1435,7 +1380,7 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 
 							__try
 							{
-								FromMDL=IoAllocateMdl((PVOID)inp->address, inp->size, FALSE, FALSE, NULL);
+								FromMDL=IoAllocateMdl((PVOID)(UINT_PTR)inp->address, inp->size, FALSE, FALSE, NULL);
 								if (FromMDL)
 									MmProbeAndLockPages(FromMDL, KernelMode, IoReadAccess);
 							}
@@ -1460,7 +1405,7 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 					DbgPrint("From kernel or self\n", inp->FromPID);
 					__try
 					{
-						FromMDL = IoAllocateMdl((PVOID)inp->address, inp->size, FALSE, FALSE, NULL);
+						FromMDL = IoAllocateMdl((PVOID)(UINT_PTR)inp->address, inp->size, FALSE, FALSE, NULL);
 						if (FromMDL)
 						{
 							DbgPrint("IoAllocateMdl success\n");
@@ -1487,7 +1432,7 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 					{
 						//switch
 						DbgPrint("To PID %d\n", inp->ToPID);
-						if (PsLookupProcessByProcessId((PVOID)(UINT64)(inp->ToPID), &selectedprocess) == STATUS_SUCCESS)
+						if (PsLookupProcessByProcessId((PVOID)(UINT_PTR)(inp->ToPID), &selectedprocess) == STATUS_SUCCESS)
 						{
 							__try
 							{
@@ -1556,16 +1501,93 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 				PMDL mdl;
 
 				inp = Irp->AssociatedIrp.SystemBuffer;
-				mdl = (PMDL)inp->FromMDL;
+				mdl = (PMDL)(UINT_PTR)inp->FromMDL;
 
-				MmUnmapLockedPages((PMDL)inp->Address, mdl);
-
+				MmUnmapLockedPages((PMDL)(UINT_PTR)inp->Address, mdl);
+				MmUnlockPages(mdl);
 				IoFreeMdl(mdl);
 
 				ntStatus = STATUS_SUCCESS; //no BSOD means success ;)
 
 				break;
 			}
+
+		case IOCTL_CE_LOCK_MEMORY:
+			{
+				struct
+				{
+					UINT64 ProcessID;
+					UINT64 address;
+					UINT64 size;
+				} *inp;
+				
+				struct
+				{					
+					UINT64 mdl;
+				} *outp;
+				KAPC_STATE apc_state;
+				PEPROCESS selectedprocess;
+
+				DbgPrint("IOCTL_CE_LOCK_MEMORY");
+				inp = Irp->AssociatedIrp.SystemBuffer;
+				outp = Irp->AssociatedIrp.SystemBuffer;
+				 
+				
+
+				if (PsLookupProcessByProcessId((PVOID)(UINT_PTR)(inp->ProcessID), &selectedprocess) == STATUS_SUCCESS)
+				{
+					PMDL mdl = NULL;
+					KeStackAttachProcess(selectedprocess, &apc_state);
+
+					__try
+					{
+						mdl = IoAllocateMdl((PVOID)(UINT_PTR)inp->address, (ULONG)inp->size, FALSE, FALSE, NULL);
+						if (mdl)
+						{
+							__try
+							{
+								MmProbeAndLockPages(mdl, UserMode, IoReadAccess);
+
+								DbgPrint("MmProbeAndLockPages succeeded");
+							}
+							__except (1)
+							{
+								DbgPrint("MmProbeAndLockPages failed");
+								IoFreeMdl(mdl);
+								ntStatus = STATUS_UNSUCCESSFUL;
+								break;
+							}
+
+						}
+					}
+					__finally
+					{
+						KeUnstackDetachProcess(&apc_state);
+					}
+
+					outp->mdl = (UINT_PTR)mdl;
+
+
+					DbgPrint("Locked the page\n");
+					ntStatus = STATUS_SUCCESS;
+				}
+				
+				break;
+			}
+
+		case IOCTL_CE_UNLOCK_MEMORY:
+		{
+			struct
+			{
+				UINT64 mdl;
+			} *inp;
+			DbgPrint("IOCTL_CE_UNLOCK_MEMORY");
+			inp = Irp->AssociatedIrp.SystemBuffer;
+
+			MmUnlockPages((PMDL)(UINT_PTR)inp->mdl);
+			IoFreeMdl((PMDL)(UINT_PTR)inp->mdl);
+			break;
+		}
 
 		case IOCTL_CE_GETPROCADDRESS:
 			{
@@ -1610,7 +1632,7 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 				outp=Irp->AssociatedIrp.SystemBuffer;
 
 				RtlInitUnicodeString(&temp, L"PsGetProcessImageFileName");
-				PsGetProcessImageFileName=MmGetSystemRoutineAddress(&temp);
+				PsGetProcessImageFileName=(GET_PROCESS_IMAGE_NAME)MmGetSystemRoutineAddress(&temp);
 				if (PsGetProcessImageFileName!=NULL)
 				{
 					outp->Address=(UINT_PTR)PsGetProcessImageFileName((PEPROCESS)((UINT_PTR)(inp->PEPROCESS)));
@@ -1776,7 +1798,7 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 				} *inp=Irp->AssociatedIrp.SystemBuffer;
 				DbgPrint("IOCTL_CE_EXECUTE_CODE\n");
 
-				functiontocall=(PARAMETERLESSFUNCTION)(inp->functionaddress);
+				functiontocall=(PARAMETERLESSFUNCTION)(UINT_PTR)(inp->functionaddress);
 
 				__try
 				{
@@ -1806,12 +1828,12 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 			{
 				DWORD msr=*(PDWORD)Irp->AssociatedIrp.SystemBuffer;
 
-				DbgPrint("IOCTL_CE_READMSR: msr=%x\n", msr);
+				//DbgPrint("IOCTL_CE_READMSR: msr=%x\n", msr);
 
 				__try
 				{
 					*(PUINT64)Irp->AssociatedIrp.SystemBuffer=__readmsr(msr);
-					DbgPrint("Output: %llx\n",*(PUINT64)Irp->AssociatedIrp.SystemBuffer); 
+					//DbgPrint("Output: %llx\n",*(PUINT64)Irp->AssociatedIrp.SystemBuffer); 
 
 					ntStatus=STATUS_SUCCESS;
 				}
@@ -1832,16 +1854,17 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 				} *inp=Irp->AssociatedIrp.SystemBuffer;
 
 				DbgPrint("IOCTL_CE_WRITEMSR:\n");
-				DbgPrint("msr=%x\n", inp->msr);
-				DbgPrint("value=%x\n", inp->value);
+				DbgPrint("msr=%llx\n", inp->msr);
+				DbgPrint("value=%llx\n", inp->value);
 
 				__try
 				{
-					__writemsr(inp->msr, inp->value );							
+					__writemsr(inp->msr, inp->value );					
 					ntStatus=STATUS_SUCCESS;
 				}
 				__except(1)
 				{
+					DbgPrint("Error while writing value\n");
 					ntStatus=STATUS_UNSUCCESSFUL;
 				}
 				break;
@@ -1854,7 +1877,9 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 					UINT32 PID;	
 					UINT32 Size;
 					UINT32 RangeCount;
-					UINT32 Reserved;
+					UINT32 NoPMI;
+					UINT32 UserMode;
+					UINT32 KernelMode;
 					URANGE Ranges[8];
 					WCHAR OutputPath[200];
 				} *inp = Irp->AssociatedIrp.SystemBuffer;
@@ -1862,9 +1887,9 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 
 				DbgPrint("IOCTL_CE_ULTIMAP2");
 				for (i = 0; i < (int)(inp->RangeCount); i++)
-					DbgPrint("%d=%p -> %p", i, (PVOID)inp->Ranges[i].StartAddress, (PVOID)inp->Ranges[i].EndAddress);
+					DbgPrint("%d=%p -> %p", i, (PVOID)(UINT_PTR)inp->Ranges[i].StartAddress, (PVOID)(UINT_PTR)inp->Ranges[i].EndAddress);
 
-				SetupUltimap2(inp->PID, inp->Size, inp->OutputPath, inp->RangeCount, inp->Ranges);
+				SetupUltimap2(inp->PID, inp->Size, inp->OutputPath, inp->RangeCount, inp->Ranges, inp->NoPMI, inp->UserMode, inp->KernelMode);
 
 				ntStatus = STATUS_SUCCESS;
 				break;
@@ -2047,7 +2072,7 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 
 				ntStatus = STATUS_UNSUCCESSFUL;
 
-				if (PsLookupProcessByProcessId((PVOID)(UINT64)(inp->ProcessID), &selectedprocess) == STATUS_SUCCESS)
+				if (PsLookupProcessByProcessId((PVOID)(UINT_PTR)(inp->ProcessID), &selectedprocess) == STATUS_SUCCESS)
 				{
 					ntStatus = markAllPagesAsNeverAccessed(selectedprocess);
 					ObDereferenceObject(selectedprocess);
@@ -2073,7 +2098,7 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 
 				ntStatus = STATUS_UNSUCCESSFUL;
 
-				if (PsLookupProcessByProcessId((PVOID)(UINT64)(inp->ProcessID), &selectedprocess) == STATUS_SUCCESS)
+				if (PsLookupProcessByProcessId((PVOID)(UINT_PTR)(inp->ProcessID), &selectedprocess) == STATUS_SUCCESS)
 				{
 					*(int *)Irp->AssociatedIrp.SystemBuffer = enumAllAccessedPages(selectedprocess);
 					ObDereferenceObject(selectedprocess);
@@ -2100,9 +2125,6 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 		case IOCTL_CE_INITIALIZE:
 			{
 				//find the KeServiceDescriptorTableShadow 
-#ifndef AMD64
-				int i;
-#endif
 				struct input
 				{
 					UINT64 AddressOfWin32K;
@@ -2118,84 +2140,16 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 					UINT64 ThreadEvent;
   				} *pinp;
 
-	
-				PSERVICE_DESCRIPTOR_TABLE PossibleKeServiceDescriptorTableShow; //long name's are FUN!!!!
-
 				DbgPrint("IOCTL_CE_INITIALIZE\n");
 				pinp=Irp->AssociatedIrp.SystemBuffer;
 				ntStatus=STATUS_SUCCESS;
-
-				//no stealth for x64
-				
-				PossibleKeServiceDescriptorTableShow=KeServiceDescriptorTable;
-
-				               
-#ifndef AMD64
-				ntStatus=STATUS_UNSUCCESSFUL; 
-#endif
-				ActiveLinkOffset=(UINT_PTR)pinp->ActiveLinkOffset;
-				ProcessNameOffset=(UINT_PTR)pinp->ProcessNameOffset;
-				DebugportOffset=(UINT_PTR)pinp->DebugportOffset;
-
-
 
 				//referencing event handles to objects
 
 				ObReferenceObjectByHandle((HANDLE)(UINT_PTR)pinp->ProcessEvent, EVENT_ALL_ACCESS, NULL,KernelMode, &ProcessEvent, NULL); 
 				ObReferenceObjectByHandle((HANDLE)(UINT_PTR)pinp->ThreadEvent, EVENT_ALL_ACCESS, NULL,KernelMode, &ThreadEvent, NULL); 
 				
-#ifndef AMD64
-				//lookup the Shadow table.
-
-				//in win2k sp4 the distance is even bigger than -6, at least 21 entries down to find it
-
-				i=-25;//takes some longer to load now....
-				while (i<25)
-				{
-					if (IsAddressSafe((UINT_PTR)&PossibleKeServiceDescriptorTableShow[i])) //dont want to crash for a page pault now do we?
- 					{
-						
-						//look for a entry that looks like:
-						//unsigned int *ServiceTable=Region of Win32K.sys
-						//unsigned int *ServiceCounterTableBase=00000000 but lets be safe and dont check it in case of a checked build
-						//unsigned int NumberOfServices=smaller than 0xffff;
-						//unsigned char *ParamTableBase=Region of Win32K.sys;
-						
-						if (((UINT_PTR)PossibleKeServiceDescriptorTableShow[i].ServiceTable>=pinp->AddressOfWin32K) &&
-							((UINT_PTR)PossibleKeServiceDescriptorTableShow[i].ServiceTable<(pinp->AddressOfWin32K+pinp->SizeOfWin32K)) &&
-							
-							((UINT_PTR)PossibleKeServiceDescriptorTableShow[i].ArgumentTable>=pinp->AddressOfWin32K) &&
-							((UINT_PTR)PossibleKeServiceDescriptorTableShow[i].ArgumentTable<(pinp->AddressOfWin32K+pinp->SizeOfWin32K)) &&
-
-							(PossibleKeServiceDescriptorTableShow[i].TableSize<0xffff)
-
-
-							)
-						{
-							//found it!!!!!!
-							KeServiceDescriptorTableShadow=&PossibleKeServiceDescriptorTableShow[i];
-							ntStatus=STATUS_SUCCESS;							
-                            *(UINT_PTR*)Irp->AssociatedIrp.SystemBuffer=(UINT_PTR)KeServiceDescriptorTableShadow;
-
-							DbgPrint("KeServiceDescriptorTableShadow[0]=%p",&KeServiceDescriptorTableShadow[0]);
-							DbgPrint("KeServiceDescriptorTableShadow[1]=%p",&KeServiceDescriptorTableShadow[1]);
-							DbgPrint("KeServiceDescriptorTableShadow[2]=%p",&KeServiceDescriptorTableShadow[2]);
-							DbgPrint("KeServiceDescriptorTableShadow[3]=%p",&KeServiceDescriptorTableShadow[3]);
-
-							
-							//AddSystemServices();
-							
-							break;
-						}
-
-
-					}
-					i++;
-				}
-#else
 				*(UINT_PTR*)Irp->AssociatedIrp.SystemBuffer=(UINT_PTR)0;
-#endif
-
 				break;
 			}
 			
@@ -2242,23 +2196,44 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 				break;
 			}
 
+
 		case IOCTL_CE_ENABLE_DRM:
 			{
 #if (NTDDI_VERSION >= NTDDI_VISTA)				
 				struct
 				{
 					QWORD PreferedAltitude;
-					QWORD ProtectedProcess;					
+					QWORD ProtectedProcess;									
 				} *inp = Irp->AssociatedIrp.SystemBuffer;
+
+	
 				
 				DbgPrint("inp->PreferedAltitude=%p", inp->PreferedAltitude);
 				DbgPrint("inp->PreferedAltitude=%p", inp->ProtectedProcess);
-				if (inp->ProtectedProcess)				
-					DRMProcess = inp->ProtectedProcess;
-				else
-					DRMProcess = PsGetCurrentProcess();
 
+				
+				if (DRMProcess)
+				{
+					//check if this process has been terminated
+					LARGE_INTEGER timeout;
+
+					timeout.QuadPart = -500000;
+					ntStatus=KeWaitForSingleObject(DRMProcess, UserRequest, UserMode, FALSE, &timeout);
+
+					if (ntStatus != STATUS_SUCCESS)
+						break;					
+				}
+
+				DRMProcess = PsGetCurrentProcess();
+
+				if (inp->ProtectedProcess)
+				{
+					if (DRMProcess != (PEPROCESS)((UINT_PTR)inp->ProtectedProcess))						
+						DRMProcess2 = (PEPROCESS)((UINT_PTR)inp->ProtectedProcess);
+				}
+					
 				DbgPrint("DRMProcess=%p", DRMProcess);
+				DbgPrint("DRMProcess2=%p", DRMProcess2);
 
 				if (DRMHandle == NULL)
 				{
@@ -2267,7 +2242,7 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 					OB_CALLBACK_REGISTRATION r;
 					LARGE_INTEGER tc;
 					OB_OPERATION_REGISTRATION obr[2];
-					int RandomVal = inp->PreferedAltitude;
+					int RandomVal = (int)(inp->PreferedAltitude);
 					int trycount = 0;
 
 					if (RandomVal == 0)
@@ -2388,7 +2363,7 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 			__try
 			{
 				
-				if (PsLookupProcessByProcessId((PVOID)inp->processid, &selectedprocess) == STATUS_SUCCESS)
+				if (PsLookupProcessByProcessId((HANDLE)(UINT_PTR)inp->processid, &selectedprocess) == STATUS_SUCCESS)
 				{
 					KAPC_STATE oldstate;
 					KeStackAttachProcess((PKPROCESS)selectedprocess, &oldstate);
@@ -2436,6 +2411,97 @@ NTSTATUS DispatchIoctl(IN PDEVICE_OBJECT DeviceObject, IN PIRP Irp)
 		{
 
 			
+			break;
+		}
+
+		case IOCTL_CE_ALLOCATE_MEMORY_FOR_DBVM:
+		{
+			PHYSICAL_ADDRESS LowAddress, HighAddress, SkipBytes;
+			PMDL mdl;
+			QWORD pagecount = *(QWORD*)Irp->AssociatedIrp.SystemBuffer;
+			PFN_NUMBER *pfnlist;
+			DbgPrint("IOCTL_CE_ALLOCATE_MEMORY_FOR_DBVM(%d)\n", pagecount);
+
+			if (!vmxusable)
+			{
+				DbgPrint("This only works when DBVM is present\n");
+				ntStatus = STATUS_INVALID_DEVICE_STATE;
+				break;
+			}
+
+			LowAddress.QuadPart = 0;
+			HighAddress.QuadPart = 0xffffffffffffffffI64;
+			SkipBytes.QuadPart = 0;
+			mdl = MmAllocatePagesForMdl(LowAddress, HighAddress, SkipBytes, pagecount * 4096); //do not free this, EVER
+			if (mdl)
+			{
+				int i;
+				PDBVMOffloadMemInfo mi;
+
+				pagecount = MmGetMdlByteCount(mdl) / 4096;
+				DbgPrint("Allocated %d pages\n", pagecount);
+
+				pfnlist = MmGetMdlPfnArray(mdl);
+
+				if (pfnlist)
+				{
+					//convert the pfnlist to a list dbvm understands, and go in blocks of 32
+					mi = ExAllocatePool(PagedPool, sizeof(DBVMOffloadMemInfo));
+					if (mi)
+					{
+						mi->List = ExAllocatePool(PagedPool, sizeof(UINT64) * 32);
+						if (mi->List)
+						{
+							mi->Count = 0;
+							for (i = 0; i < pagecount; i++)
+							{
+								mi->List[mi->Count] = pfnlist[i] << 12;
+								mi->Count++;
+
+								if (mi->Count == 32)
+								{
+									int j;
+									int r = vmx_add_memory(mi->List, mi->Count);
+									DbgPrint("vmx_add_memory for %d pages returned %d\n", mi->Count, r);
+
+									for (j = 0; j < mi->Count; j++)
+									{
+										DbgPrint("%d : %p\n", j, (void*)mi->List[j]);
+									}
+
+
+									mi->Count = 0;
+								}
+							}
+
+							if (mi->Count)
+							{
+								int r = vmx_add_memory(mi->List, mi->Count);
+								DbgPrint("vmx_add_memory for %d pages returned %d\n", mi->Count, r);
+							}
+							ExFreePool(mi->List);
+						}
+						else
+							DbgPrint("Failure allocating mi->List");
+						ExFreePool(mi);
+					}
+					else
+						DbgPrint("Failure allocting mi");
+
+				}
+				else
+					DbgPrint("Failure getting pfn list");
+				ExFreePool(mdl); //only free the mdl, the rest belongs to dbvm now
+
+				ntStatus = STATUS_SUCCESS;
+			}
+			else
+			{
+				DbgPrint("Failure allocating MDL");
+				ntStatus = STATUS_MEMORY_NOT_ALLOCATED;
+			}
+
+
 			break;
 		}
 

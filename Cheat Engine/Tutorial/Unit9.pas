@@ -86,7 +86,7 @@ var
 
 implementation
 
-uses Unit4, Unit10;
+uses Unit4, Unit10, frmHelpUnit;
 
 resourcestring
   rsStep8MultilevelPointersPW = 'Step 8: Multilevel pointers: (PW=%s)';
@@ -189,6 +189,7 @@ begin
   memo1.Lines.Insert(0, Format(rsStep8MultilevelPointersPW, [inttostr(525)+inttostr(927)]));
   memo1.SelStart:=0;
   font.size:=12;
+  frmHelp.attach(self,'8');
 end;
 
 procedure TForm9.Button1Click(Sender: TObject);
@@ -325,10 +326,13 @@ begin
   canclose:=MessageDlg(rsTryAgain9, mtconfirmation, [mbyes, mbno], 0)=mryes;
 end;
 
+
+
 procedure TForm9.Button2Click(Sender: TObject);
 begin
 
   hide;
+
   form10:=tform10.create(self);
   form10.left:=left;
   form10.top:=top;

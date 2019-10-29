@@ -2,6 +2,8 @@ unit formAddressChangeUnit;
 
 {$MODE Delphi}
 
+{$warn 3057 off}
+
 interface
 
 uses
@@ -9,7 +11,8 @@ uses
   Classes, Graphics, Controls, Forms, Dialogs, StdCtrls, ExtCtrls, ComCtrls,
   Buttons, Arrow, Spin, Menus, CEFuncProc, NewKernelHandler, symbolhandler,
   memoryrecordunit, types, byteinterpreter, math, CustomTypeHandler,
-  commonTypeDefs, lua, lualib, lauxlib, luahandler, CommCtrl, LuaClass;
+  commonTypeDefs, lua, lualib, lauxlib, luahandler, CommCtrl, LuaClass, Clipbrd,
+  DPIHelper;
 
 const WM_disablePointer=WM_USER+1;
 
@@ -26,7 +29,9 @@ type
     fInvalidOffset: boolean;
     fSpecial: boolean;
 
+   // give this a popupmenu
     lblPointerAddressToValue: TLabel; //Address -> Value
+
     edtOffset: Tedit;
     sbDecrease, sbIncrease: TSpeedButton;
     istop: boolean;
@@ -62,7 +67,7 @@ type
     property offset: integer read foffset write setOffset;  //obsolete, use offsetString
     property offsetString: string read fOffsetString write setOffsetString;
     property invalidOffset: boolean read fInvalidOffset;
-    property baseAddress: ptruint write setBaseAddress;
+    property baseAddress: ptruint read fBaseAddress write setBaseAddress;
     property special: boolean read fspecial;
 
     property OnlyUpdateWithReinterpret: boolean read fReinterpretUpdateOnly write fReinterpretUpdateOnly;
@@ -115,11 +120,17 @@ type
   TformAddressChange = class(TForm)
     cbCodePage: TCheckBox;
     editDescription: TEdit;
+    caImageList: TImageList;
     Label12: TLabel;
     Label3: TLabel;
     lblValue: TLabel;
+    miCut: TMenuItem;
+    miCopy: TMenuItem;
+    miPaste: TMenuItem;
+    miAddAddressToList: TMenuItem;
     miUpdateOnReinterpretOnly: TMenuItem;
     miUpdateAfterInterval: TMenuItem;
+    pmPointerRow: TPopupMenu;
     pnlBitinfo: TPanel;
     cbunicode: TCheckBox;
     cbvarType: TComboBox;
@@ -167,6 +178,10 @@ type
     procedure FormDestroy(Sender: TObject);
     procedure FormShow(Sender: TObject);
     procedure FormWindowStateChange(Sender: TObject);
+    procedure miAddAddressToListClick(Sender: TObject);
+    procedure miCopyClick(Sender: TObject);
+    procedure miCutClick(Sender: TObject);
+    procedure miPasteClick(Sender: TObject);
     procedure miUpdateAfterIntervalClick(Sender: TObject);
     procedure miUpdateOnReinterpretOnlyClick(Sender: TObject);
     procedure pcExtraChange(Sender: TObject);
@@ -217,7 +232,7 @@ var
 
 implementation
 
-uses MainUnit, formsettingsunit, ProcessHandlerUnit, Parsers;
+uses MainUnit, formsettingsunit, ProcessHandlerUnit, Parsers, vartypestrings;
 
 resourcestring
   rsThisPointerPointsToAddress = 'This pointer points to address';
@@ -496,6 +511,16 @@ begin
     lblPointerAddressToValue.parent:=owner;
     sbDecrease.parent:=owner;
     sbIncrease.parent:=owner;
+
+    AdjustEditBoxSize(edtOffset,owner.Canvas.GetTextWidth(' XXXX '));
+//  edtOffset.Width:=;
+
+  //  dpi
+
+    sbDecrease.height:=edtOffset.Height;
+    sbDecrease.Width:=sbDecrease.Height;
+    sbIncrease.height:=sbDecrease.Height;
+    sbIncrease.Width:=sbDecrease.height;
   end;
 
 
@@ -516,7 +541,8 @@ begin
   lblPointerAddressToValue.visible:=true;
 
 
-  newtop:=sbDecrease.top+sbDecrease.height+3;
+
+  newtop:=sbDecrease.top+sbDecrease.height+ceil(3*getDPIScaleFactor);
 end;
 
 destructor TOffsetInfo.destroy;
@@ -609,7 +635,9 @@ begin
   //create a pointeraddress label (visible if not first)
   lblPointerAddressToValue:=TLabel.Create(parent);
   lblPointerAddressToValue.Caption:=' ';
+  lblPointerAddressToValue.popupmenu:=fowner.fowner.pmPointerRow;
   lblPointerAddressToValue.parent:=parent;
+  lblPointerAddressToValue.Tag:=ptruint(self);
 
   //an offset editbox
   fOffset:=0;
@@ -625,8 +653,9 @@ begin
 
   //two buttons, one for + and one for -
   sbDecrease:=TSpeedButton.create(parent);
-  sbDecrease.Width:=edtOffset.Height;
-  sbDecrease.Height:=edtOffset.Height;
+
+  sbDecrease.Width:=edtOffset.Height*8;
+  sbDecrease.Height:=edtOffset.Height*8;
   sbDecrease.AnchorSideTop.Control:=edtOffset;
   sbDecrease.AnchorSideTop.Side:=asrCenter;
   sbDecrease.AnchorSideLeft.Control:=parent;
@@ -650,7 +679,7 @@ begin
   sbIncrease.OnMouseDown:=IncreaseDown;
   sbIncrease.OnMouseUp:=IncreaseDecreaseUp;
 
-  edtOffset.width:=owner.baseAddress.Width-2*sbIncrease.Height-2;
+  edtOffset.width:=owner.canvas.GetTextWidth(' XXXX ');
 
 
   edtOffset.AnchorSideLeft.Control:=sbIncrease;
@@ -1143,8 +1172,12 @@ end;
 
 
 procedure Tformaddresschange.processaddress;
-var a: PtrUInt;
+var
+  a: PtrUInt;
   e: boolean;
+  s: string;
+  wantedsize, size: integer;
+  ct: TCustomType;
 begin
   //read the address and display the value it points to
 
@@ -1152,7 +1185,19 @@ begin
   if not e then
   begin
     //get the vartype and parse it
-    lblValue.caption:='='+readAndParseAddress(a, vartype, TcustomType(cbvarType.items.objects[cbvarType.ItemIndex]),false, false, StrToIntDef(edtSize.text,1));
+
+    wantedsize:=StrToIntDef(edtSize.text,1);
+    size:=max(30,wantedsize);
+
+    ct:=TcustomType(cbvarType.items.objects[cbvarType.ItemIndex]);
+    if ct<>nil then
+      size:=ct.bytesize;
+
+    s:='='+readAndParseAddress(a, vartype, TcustomType(cbvarType.items.objects[cbvarType.ItemIndex]),false, false, size);
+    if edtSize.visible and (size<>wantedsize) then
+      s:=s+'...';
+
+    lblValue.caption:=s;
   end
   else
     lblValue.caption:='=???';
@@ -1401,6 +1446,18 @@ procedure TformAddressChange.FormCreate(Sender: TObject);
 var i: integer;
 begin
   //fill the varlist with custom types
+  cbvarType.Items.Clear;
+  cbvarType.items.add(rs_vtBinary);
+  cbvarType.items.add(rs_vtByte);
+  cbvarType.items.add(rs_vtWord);
+  cbvarType.items.add(rs_vtDword);
+  cbvarType.items.add(rs_vtQword);
+  cbvarType.items.add(rs_vtSingle);
+  cbvarType.items.add(rs_vtDouble);
+  cbvarType.items.add(rs_vtString);
+  cbvarType.items.add(rs_vtByteArray);
+
+
   for i:=0 to customTypes.Count-1 do
     cbvarType.Items.AddObject(TCustomType(customtypes[i]).name, customtypes[i]);
 
@@ -1468,11 +1525,78 @@ begin
 
   btnok.width:=i;
   btncancel.width:=i;
+
+  autosize:=false;
+  AdjustHeightAndButtons;
+
+  processaddress;
+
+  Repaint;
+
+  autosize:=true;
 end;
 
 procedure TformAddressChange.FormWindowStateChange(Sender: TObject);
 begin
 
+end;
+
+procedure TformAddressChange.miAddAddressToListClick(Sender: TObject);
+var
+  oi: TOffsetInfo;
+  a: ptruint;
+  i: integer;
+  index: integer;
+  mr: TMemoryRecord;
+begin
+  if processhandler.is64bit then
+    vartype:=vtQword
+  else
+    vartype:=vtDword;
+
+  if pmPointerRow.PopupComponent is TLabel then
+  begin
+    oi:=TOffsetInfo(tlabel(pmPointerRow.PopupComponent).tag);
+
+    index:=-1;
+    for i:=0 to oi.owner.offsetcount-1 do
+      if oi.owner.offset[i]=oi then
+      begin
+        index:=i;
+        break;
+      end;
+
+    if oi.getAddressThisPointsTo(a) then
+    begin
+      //readable
+      a:=oi.baseAddress+oi.offset;
+      mr:=MainForm.addresslist.addaddress(editDescription.text+' offset '+inttostr(index), inttohex(a,8),[],0,vartype);
+
+      if ssctrl in GetKeyShiftState then
+      begin
+        //the whole pointer up till this position
+        mr.OffsetCount:=index+1;
+        for i:=0 to index do
+          mr.offsets[i].offsetText:=oi.owner.offset[i].edtOffset.text;
+      end;
+      mr.ShowAsHex:=true;
+    end;
+  end;
+end;
+
+procedure TformAddressChange.miCopyClick(Sender: TObject);
+begin
+  if (pmOffset.PopupComponent is Tedit) then tedit(pmOffset.PopupComponent).CopyToClipboard;
+end;
+
+procedure TformAddressChange.miCutClick(Sender: TObject);
+begin
+  if (pmOffset.PopupComponent is Tedit) then tedit(pmOffset.PopupComponent).CutToClipboard;
+end;
+
+procedure TformAddressChange.miPasteClick(Sender: TObject);
+begin
+  if (pmOffset.PopupComponent is Tedit) then tedit(pmOffset.PopupComponent).PasteFromClipboard;
 end;
 
 procedure TformAddressChange.miUpdateAfterIntervalClick(Sender: TObject);
@@ -1527,6 +1651,12 @@ begin
 
     miUpdateOnReinterpretOnly.Checked:=oi.fReinterpretUpdateOnly;
     miUpdateAfterInterval.Checked:=oi.fOnlyUpdateAfterInterval;
+
+ //   clipboard.;
+    miCut.enabled:=oi.edtOffset.SelLength>0;
+    miCopy.enabled:=miCut.enabled;
+    miPaste.enabled:=Clipboard.AsText<>'';
+
   end;
 end;
 

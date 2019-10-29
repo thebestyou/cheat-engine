@@ -40,6 +40,8 @@
 #define MONOCMD_OBJECT_INIT 34
 #define MONOCMD_GETVTABLEFROMCLASS 35
 #define MONOCMD_GETMETHODPARAMETERS 36
+#define MONOCMD_ISCLASSGENERIC 37
+
 
 typedef struct MonoType;
 typedef struct MonoMethodSignature;
@@ -58,6 +60,7 @@ typedef void* (__cdecl *MONO_OBJECT_GET_CLASS)(void *object);
 typedef void (__cdecl *MONO_DOMAIN_FOREACH)(MonoDomainFunc func, void *user_data);
 
 typedef int (__cdecl *MONO_DOMAIN_SET)(void *domain, BOOL force);
+typedef void* (__cdecl *MONO_DOMAIN_GET)();
 typedef int (__cdecl *MONO_ASSEMBLY_FOREACH)(GFunc func, void *user_data);
 typedef void* (__cdecl *MONO_ASSEMBLY_GET_IMAGE)(void *assembly);
 typedef void* (__cdecl *MONO_ASSEMBLY_OPEN)(void *fname, int *status);
@@ -75,6 +78,10 @@ typedef void* (__cdecl *MONO_CLASS_FROM_NAME)(void *image, char *name_space, cha
 typedef char* (__cdecl *MONO_CLASS_GET_NAME)(void *klass);
 typedef char* (__cdecl *MONO_CLASS_GET_NAMESPACE)(void *klass);
 typedef void* (__cdecl *MONO_CLASS_GET)(void *image, UINT32 tokenindex);
+typedef void* (__cdecl *MONO_CLASS_FROM_TYPEREF)(void *image, UINT32 type_token);
+typedef char* (__cdecl *MONO_CLASS_NAME_FROM_TOKEN)(void *image, UINT32 token);
+
+
 typedef void* (__cdecl *MONO_CLASS_GET_METHODS)(void *klass, void *iter);
 typedef void* (__cdecl *MONO_CLASS_GET_METHOD_FROM_NAME)(void *klass, char *methodname, int paramcount);
 typedef void* (__cdecl *MONO_CLASS_GET_FIELDS)(void *klass, void *iter);
@@ -82,6 +89,8 @@ typedef void* (__cdecl *MONO_CLASS_GET_PARENT)(void *klass);
 typedef void* (__cdecl *MONO_CLASS_VTABLE)(void *domain, void *klass);
 typedef void* (__cdecl *MONO_CLASS_FROM_MONO_TYPE)(void *type);
 typedef void* (__cdecl *MONO_CLASS_GET_ELEMENT_CLASS)(void *klass);
+typedef int (__cdecl *MONO_CLASS_IS_GENERIC)(void *klass);
+
 
 
 typedef int (__cdecl *MONO_CLASS_NUM_FIELDS)(void *klass);
@@ -162,6 +171,7 @@ typedef void* (__cdecl *MONO_CLASS_GET_TYPE)(void *klass);
 
 
 
+
 class CPipeServer : Pipe
 {
 private:	
@@ -180,9 +190,11 @@ private:
 	MONO_CLASS_GET_PARENT mono_class_get_parent;
 	MONO_CLASS_VTABLE mono_class_vtable;
 	MONO_CLASS_FROM_MONO_TYPE mono_class_from_mono_type;
+	MONO_CLASS_IS_GENERIC mono_class_is_generic;
 
 	MONO_DOMAIN_FOREACH mono_domain_foreach;
 	MONO_DOMAIN_SET mono_domain_set;
+	MONO_DOMAIN_GET mono_domain_get;
 	MONO_ASSEMBLY_FOREACH mono_assembly_foreach;	
 	MONO_ASSEMBLY_GET_IMAGE mono_assembly_get_image;
 	MONO_IMAGE_GET_ASSEMBLY mono_image_get_assembly;
@@ -198,6 +210,9 @@ private:
 	MONO_METADATA_DECODE_ROW_COL mono_metadata_decode_row_col;
 	MONO_METADATA_STRING_HEAP mono_metadata_string_heap;
 	MONO_CLASS_GET mono_class_get;
+	MONO_CLASS_FROM_TYPEREF mono_class_from_typeref;
+	MONO_CLASS_NAME_FROM_TOKEN mono_class_name_from_token;
+
 	MONO_CLASS_FROM_NAME_CASE mono_class_from_name_case;
 	MONO_CLASS_FROM_NAME mono_class_from_name;
 
@@ -307,6 +322,7 @@ private:
 	void GetFullTypeName();
 	void Object_New();
 	void Object_Init();
+	void IsGenericClass();
 
 public:
 	CPipeServer(void);

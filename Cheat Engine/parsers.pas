@@ -32,7 +32,7 @@ procedure getRegisterListFromParams(params: string; registerlist: Tstrings);
 
 implementation
 
-uses symbolhandler, assemblerunit;
+uses windows, symbolhandler, assemblerunit;
 
 resourcestring
    rsInvalidInteger = 'Invalid integer';
@@ -43,8 +43,7 @@ procedure getRegisterListFromParams(params: string; registerlist: Tstrings);
 }
 var
   tokens: TTokens;
-  tokens2: TTokens;
-  i,j: integer;
+  i: integer;
   isrnumber: boolean;
   seplist: TSysCharSet;
 begin
@@ -243,7 +242,7 @@ This routine will use StrToQword unless it is a negative value, in which case it
 begin
   s:=trim(s);
   if length(s)=0 then
-    raise exception.create(rsInvalidInteger)
+    raise EParserError.create(rsInvalidInteger)
   else
   begin
     try
@@ -535,6 +534,10 @@ function HexStrToInt64(const S: string): Int64;
 begin
   result:=StrToQWordEx(ConvertHexStrToRealStr(s));
 end;
+
+initialization
+  outputdebugstring('parsers');
+
 
 end.
 

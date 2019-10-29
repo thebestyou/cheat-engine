@@ -26,11 +26,16 @@ type
 
   TProcessWindow = class(TForm)
     btnNetwork: TButton;
-    Button4: TButton;
+    btnAttachDebugger: TButton;
     CancelButton: TButton;
     FontDialog1: TFontDialog;
+    plImageList: TImageList;
     MainMenu1: TMainMenu;
     MenuItem1: TMenuItem;
+    MenuItem2: TMenuItem;
+    MenuItem3: TMenuItem;
+    miConvertPIDToDecimal: TMenuItem;
+    miRefresh: TMenuItem;
     miCreateProcess: TMenuItem;
     miOpenFile: TMenuItem;
     N2: TMenuItem;
@@ -52,7 +57,7 @@ type
     Filter1: TMenuItem;
     ProcessList: TListBox;
     miShowInvisibleItems: TMenuItem;
-    TabControl1: TTabControl;
+    TabHeader: TTabControl;
     Timer1: TTimer;
     procedure btnNetworkClick(Sender: TObject);
     procedure Button1Click(Sender: TObject);
@@ -63,11 +68,12 @@ type
     procedure miProcessListLongClick(Sender: TObject);
     procedure miChangeFontClick(Sender: TObject);
     procedure miOwnProcessesOnlyClick(Sender: TObject);
+    procedure miRefreshClick(Sender: TObject);
     procedure OKButtonClick(Sender: TObject);
     procedure btnProcesslistClick(Sender: TObject);
     procedure btnWindowListClick(Sender: TObject);
     procedure btnCreateThreadClick(Sender: TObject);
-    procedure Button4Click(Sender: TObject);
+    procedure btnAttachDebuggerClick(Sender: TObject);
     procedure btnOpenFileClick(Sender: TObject);
     procedure InputPIDmanually1Click(Sender: TObject);
     procedure Filter1Click(Sender: TObject);
@@ -81,7 +87,7 @@ type
     procedure FormShow(Sender: TObject);
     procedure ProcessListKeyPress(Sender: TObject; var Key: char);
     procedure miShowInvisibleItemsClick(Sender: TObject);
-    procedure TabControl1Change(Sender: TObject);
+    procedure TabHeaderChange(Sender: TObject);
     procedure Timer1Timer(Sender: TObject);
   private
     { Private declarations }
@@ -99,6 +105,8 @@ type
   public
     { Public declarations }
     procedure PWOP(ProcessIDString:string);
+  published
+    property TabControl1: TTabControl read TabHeader;
   end;
 
 var
@@ -110,7 +118,7 @@ implementation
 
 uses MainUnit, formsettingsunit, advancedoptionsunit,frmProcessWatcherUnit,
   memorybrowserformunit, networkConfig, ProcessHandlerUnit, processlist, globals,
-  registry, fontSaveLoadRegistry;
+  registry, fontSaveLoadRegistry, frmOpenFileAsProcessDialogUnit;
 
 resourcestring
   rsIsnTAValidProcessID = '%s isn''t a valid processID';
@@ -197,7 +205,7 @@ begin
   begin
     if commonProcessesList=nil then commonProcessesList:=tstringlist.create;
     try
-      commonProcessesList.LoadFromFile(s);
+      commonProcessesList.LoadFromFile(s, true);
       for i:=commonProcessesList.Count-1 downto 0 do
       begin
         j:=pos('#', commonProcessesList[i]);
@@ -248,7 +256,7 @@ begin
           pli^.processIcon:=0;
         end;
 
-        freemem(pli);
+        freememandnil(pli);
       end;
 
       processlist.Items.Delete(i);
@@ -278,16 +286,16 @@ var
   x: array of integer;
   reg: tregistry;
 begin
-  TabControl1.Tabs[0]:=rsApplications;
-  TabControl1.Tabs[1]:=rsProcesses;
-  TabControl1.Tabs[2]:=rsWindows;
+  TabHeader.Tabs[0]:=rsApplications;
+  TabHeader.Tabs[1]:=rsProcesses;
+  TabHeader.Tabs[2]:=rsWindows;
 
   setlength(x,0);
   if LoadFormPosition(self,x) then
   begin
     autosize:=false;
     if length(x)>0 then
-      tabcontrol1.TabIndex:=x[0];
+      TabHeader.TabIndex:=x[0];
 
     if length(x)>1 then
       begin
@@ -318,8 +326,13 @@ begin
 end;
 
 procedure TProcessWindow.FormDestroy(Sender: TObject);
+var x: array of integer;
 begin
-  SaveFormPosition(self,[tabcontrol1.TabIndex, ifthen(miOwnProcessesOnly.checked,1,0), ifthen(miSkipSystemProcesses.checked,1,0)]);
+  setlength(x,3);
+  x[0]:=TabHeader.TabIndex;
+  x[1]:=ifthen(miOwnProcessesOnly.checked,1,0);
+  x[2]:=ifthen(miSkipSystemProcesses.checked,1,0);
+  SaveFormPosition(self,x);
 end;
 
 procedure TProcessWindow.MenuItem5Click(Sender: TObject);
@@ -365,6 +378,11 @@ begin
   refreshlist;
 end;
 
+procedure TProcessWindow.miRefreshClick(Sender: TObject);
+begin
+  refreshList;
+end;
+
 procedure TProcessWindow.btnNetworkClick(Sender: TObject);
 begin
   if frmNetworkConfig=nil then
@@ -372,10 +390,10 @@ begin
 
   if frmNetworkConfig.ShowModal=mrok then
   begin
-    if TabControl1.TabIndex=1 then
+    if TabHeader.TabIndex=1 then
       refreshlist
     else
-      TabControl1.Tabindex:=1;
+      TabHeader.Tabindex:=1;
   end;
 end;
 
@@ -397,7 +415,9 @@ begin
   if i<>0 then raise exception.Create(Format(rsIsnTAValidProcessID, [processidstring]));
   if Processhandle<>0 then
   begin
-    CloseHandle(ProcessHandle);
+    if (processhandle<>0) and (processhandle<>INVALID_HANDLE_VALUE) and (processhandle<>$FFFFFFFF) then
+      CloseHandle(ProcessHandle);
+
     ProcessHandler.ProcessHandle:=0;
   end;
 
@@ -411,6 +431,29 @@ begin
       cbunrandomizer.Enabled:=true;
     end;
   end;
+
+  if (processid<>0) and (UseFileAsMemory or Usephysical or usephysicaldbvm) then
+  begin
+    //swap back to processmemory
+    UseFileAsMemory:=false;
+    Usephysical:=false;
+    usephysicaldbvm:=false;
+    if formsettings.cbKernelOpenProcess.checked then
+      UseDBKOpenProcess
+    else
+      DONTUseDBKOpenProcess;
+
+    if formsettings.cbKernelQueryMemoryRegion.checked then
+      UseDBKQueryMemoryRegion
+    else
+      DONTUseDBKQueryMemoryRegion;
+
+    if formsettings.cbKernelReadWriteProcessMemory.checked then
+      UseDBKReadWriteMemory
+    else
+      DONTUseDBKReadWriteMemory;
+  end;
+
 
   Open_Process;
 
@@ -448,7 +491,7 @@ begin
 
     PWOP(ProcessIDString);
 
-    if tabcontrol1.TabIndex=0 then
+    if TabHeader.TabIndex=0 then
       MainForm.ProcessLabel.caption:=ProcessIDString+'-'+extractfilename(getProcessPathFromProcessID(processid))
     else
       MainForm.ProcessLabel.caption:=ProcessList.Items[Processlist.ItemIndex];
@@ -505,7 +548,7 @@ begin
   end;
 end;
 
-procedure TProcessWindow.Button4Click(Sender: TObject);
+procedure TProcessWindow.btnAttachDebuggerClick(Sender: TObject);
 var ProcessIDString: String;
     i:               Integer;
 begin
@@ -551,16 +594,26 @@ end;
 procedure TProcessWindow.btnOpenFileClick(Sender: TObject);
 begin
 
+
+
   if opendialog2.execute then
   begin
-    DBKFileAsMemory(opendialog2.filename);
-    processselected:=true;
-    ProcessHandler.ProcessHandle:=-1;
-    MainForm.ProcessLabel.caption:=extractfilename(opendialog2.FileName);
-    MainForm.miSaveFile.visible:=true;
-    ProcessHandler.processid:=$FFFFFFFF;
+    if frmOpenFileAsProcessDialog=nil then
+      frmOpenFileAsProcessDialog:=tfrmOpenFileAsProcessDialog.create(self);
 
-    modalresult:=mrok;
+    if frmOpenFileAsProcessDialog.showmodal=mrok then
+    begin
+      DBKFileAsMemory(opendialog2.filename, frmOpenFileAsProcessDialog.startaddress);
+      processselected:=true;
+      ProcessHandler.ProcessHandle:=QWORD(-2);
+      MainForm.ProcessLabel.caption:=extractfilename(opendialog2.FileName);
+      MainForm.miSaveFile.visible:=true;
+      ProcessHandler.processid:=$FFFFFFFF;
+
+      Processhandler.is64Bit:=frmOpenFileAsProcessDialog.rb64.checked;
+
+      modalresult:=mrok;
+    end;
   end;
 
 end;
@@ -591,9 +644,9 @@ end;
 
 procedure TProcessWindow.btnProcessWatchClick(Sender: TObject);
 begin
-
   if frmprocesswatcher=nil then
     frmprocesswatcher:=tfrmprocesswatcher.Create(mainform);
+
   frmprocesswatcher.show;
   modalresult:=mrcancel;
 end;
@@ -639,12 +692,19 @@ end;
 
 procedure TProcessWindow.PopupMenu1Popup(Sender: TObject);
 begin
-
+  miShowInvisibleItems.visible:=tabheader.TabIndex=2;
 end;
 
 procedure TProcessWindow.ProcessListDrawItem(Control: TWinControl;
   Index: Integer; Rect: TRect; State: TOwnerDrawState);
-var i: integer;
+var
+  i: integer;
+  t: string;
+
+  sep: integer;
+
+  pids: string;
+  pid: dword;
 begin
   wantedheight:=ProcessList.canvas.TextHeight('QqJjWwSs')+3;
   {i:=ProcessList.canvas.TextHeight('QqJjWwSs')+3;
@@ -656,8 +716,23 @@ begin
   if processlist.itemheight<i then ProcessList.ItemHeight:=i;}
 
 
+  t:=processlist.Items[index];
+  if miConvertPIDToDecimal.checked then
+  begin
+    sep:=pos('-',t);
+    if sep<>0 then
+    begin
+      try
+        pids:=copy(t,1,sep-1);
+        pid:=strtoint('$'+pids);
+        t:=format('%.8d',[pid])+copy(t,sep);
+      except
+      end;
+    end;
+  end;
 
-  processlist.Canvas.TextOut(rect.Left+rect.Bottom-rect.Top+3,rect.Top,processlist.Items[index]);
+
+  processlist.Canvas.TextOut(rect.Left+rect.Bottom-rect.Top+3,rect.Top,t);
 
   if (processlist.Items.Objects[index]<>nil) and (PProcessListInfo(processlist.Items.Objects[index])^.processIcon>0) then
     DrawIconEx(processlist.Canvas.Handle, rect.left, rect.Top, PProcessListInfo(processlist.Items.Objects[index])^.processIcon, rect.Bottom-rect.Top,rect.Bottom-rect.Top,0,0,DI_NORMAL);
@@ -666,6 +741,9 @@ end;
 
 procedure TProcessWindow.FormShow(Sender: TObject);
 begin
+  OKButton.Constraints.MinHeight:=trunc(1.2*btnAttachDebugger.height);
+  CancelButton.Constraints.MinHeight:=OKButton.Constraints.MinHeight;
+
   loadCommonProcessesList;
   errortrace:=100;
   try
@@ -683,8 +761,11 @@ begin
     if autosize then
     begin
       autosize:=false;
-      if height<350 then
-        height:=350; //initial show
+      //first run or no saving positions
+      clientwidth:=max(clientwidth, canvas.TextWidth('  XXXXXXXX - XXXXXXXXXXXXXXXXXXXXXX  '));
+      height:=mainform.Height-(mainform.height div 3);
+      position:=poDesigned;
+      position:=poMainFormCenter;
     end;
     errortrace:=106;
 
@@ -720,7 +801,7 @@ begin
     if oldselectionindex<>-1 then
       oldselection:=processlist.Items[oldselectionIndex];
 
-    case tabcontrol1.TabIndex of
+    case TabHeader.TabIndex of
       0:
       begin
         getwindowlist2(processlist.Items);
@@ -795,7 +876,7 @@ begin
   refreshList;
 end;
 
-procedure TProcessWindow.TabControl1Change(Sender: TObject);
+procedure TProcessWindow.TabHeaderChange(Sender: TObject);
 begin
   refreshList;
 end;

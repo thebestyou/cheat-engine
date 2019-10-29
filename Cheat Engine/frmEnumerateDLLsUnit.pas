@@ -7,7 +7,8 @@ interface
 uses
   windows, LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
   Dialogs,CEFuncProc,imagehlp, StdCtrls, ComCtrls, ExtCtrls, ActnList,
-  Menus, LResources,symbolhandler, FindDialogFix, commonTypeDefs;
+  Menus, LResources,symbolhandler, symbolhandlerstructs, FindDialogFix,
+  commonTypeDefs, strutils, ProcessHandlerUnit, Clipbrd;
 
 type tenumthread=class(tthread)
   public
@@ -26,7 +27,10 @@ type
   { TfrmEnumerateDLLs }
 
   TfrmEnumerateDLLs = class(TForm)
+    CopySymbolName: TAction;
+    edImageList: TImageList;
     Label2: TLabel;
+    CopySymbolName1: TMenuItem;
     TreeView1: TTreeView;
     Panel1: TPanel;
     Button1: TButton;
@@ -36,12 +40,15 @@ type
     Find: TAction;
     pmSymbol: TPopupMenu;
     Find1: TMenuItem;
+    procedure CopySymbolNameExecute(Sender: TObject);
     procedure Button1Click(Sender: TObject);
     procedure FindDialog1Close(Sender: TObject);
     procedure FormClose(Sender: TObject; var Action: TCloseAction);
     procedure FormCreate(Sender: TObject);
     procedure FormDestroy(Sender: TObject);
     procedure FormShow(Sender: TObject);
+    procedure TreeView1CustomDrawItem(Sender: TCustomTreeView; Node: TTreeNode;
+      State: TCustomDrawState; var DefaultDraw: Boolean);
     procedure TreeView1DblClick(Sender: TObject);
     procedure Button2Click(Sender: TObject);
     procedure FindExecute(Sender: TObject);
@@ -118,7 +125,7 @@ begin
   Priority:=tpLower;
 
  // symhandler.waitforsymbolsloaded;
-  
+
   if not canceled then
   begin
     sl:=tstringlist.create;
@@ -183,6 +190,12 @@ begin
   close;
 end;
 
+procedure TfrmEnumerateDLLs.CopySymbolNameExecute(Sender: TObject);
+begin
+  if Treeview1.Selected<>nil then
+    Clipboard.AsText:=TreeView1.Selected.Text;
+end;
+
 procedure TfrmEnumerateDLLs.FindDialog1Close(Sender: TObject);
 begin
   findpos.x:=finddialog1.left;
@@ -225,6 +238,43 @@ begin
 
 end;
 
+procedure TfrmEnumerateDLLs.TreeView1CustomDrawItem(Sender: TCustomTreeView;
+  Node: TTreeNode; State: TCustomDrawState; var DefaultDraw: Boolean);
+var
+    i,j: integer;
+    s: string;
+    a: ptruint;
+    p: pchar;
+    x: ptruint;
+begin
+  defaultdraw:=true;
+  s:=node.text;
+  i:=RPos(' --> ',s);
+  j:=length(s);
+
+  if (i=j-4) then
+  begin
+    i:=pos(' - ',s);
+    s:=copy(s,1,i);
+    try
+      a:=StrToQWordEx('$'+s);
+
+
+      if i>0 then
+      begin
+        getmem(p,128);
+        x:=0;
+        readprocessmemory(processhandle, pointer(a),p,127,x);
+        p[x]:=#0;
+        node.text:=node.text+p;
+        freememandnil(p);
+      end;
+
+    except
+    end;
+  end;
+end;
+
 procedure TfrmEnumerateDLLs.TreeView1DblClick(Sender: TObject);
 var address: ptrUint;
     i: integer;
@@ -250,8 +300,21 @@ begin
       address:=StrToQWordEx('$'+s);
       { val('$'+s,address,i); fpc 2.4.1 doesn't handle this correctly }
 
+      i:=pos(' --> ',treeview1.Selected.Text);
+      if i>0 then
+      begin
+        memorybrowser.hexview.Address:=address;
+        s:=copy(treeview1.Selected.Text,i+5,length(treeview1.Selected.Text));
+
+        try
+          memorybrowser.disassemblerview.SelectedAddress:=symhandler.getAddressFromName(s);
+        except
+        end;
+      end
+      else
+        memorybrowser.disassemblerview.SelectedAddress:=address;
      //showmessage('s='+s+' address='+inttohex(address,8));
-      memorybrowser.disassemblerview.SelectedAddress:=address;
+
     end;
   end;
 end;

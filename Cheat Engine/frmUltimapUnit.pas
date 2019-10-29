@@ -80,6 +80,7 @@ type
     edtFilename: TEdit;
     edtWorkerCount: TEdit;
     Flusher: TTimer;
+    umImageList: TImageList;
     Label1: TLabel;
     Label2: TLabel;
     Label3: TLabel;
@@ -176,6 +177,9 @@ var
 
   filteroutnewentries: boolean;
 
+resourcestring
+  rsRemoveHotkey = 'Remove hotkey (%s)';
+
 implementation
 
 {$R *.lfm}
@@ -183,7 +187,6 @@ implementation
 uses MemoryBrowserFormUnit, vmxfunctions, ProcessHandlerUnit, AdvancedOptionsUnit;
 
 resourcestring
-  rsRemoveHotkey = 'Remove hotkey (%s)';
   rsUUOld = 'old=';
   rsUUNew = ' new=';
   rsUUErrorDuringMap = 'Error during map';
@@ -985,13 +988,12 @@ begin
         a:=validlist[i].lastFromAddress
       else
         a:=validlist[i].toAddress;
+
+      a2:=a;
+      disassemble(a2);
+
+      advancedoptions.AddToCodeList(a, a2-a,false,true);
     end;
-
-    a2:=a;
-    disassemble(a2);
-
-
-    advancedoptions.AddToCodeList(a, a2-a,false,true);
   end;
 end;
 
@@ -1018,6 +1020,8 @@ begin
       else
         FilterHotkey[i].keys:=f.newhotkey;
     end;
+
+    f.free;
   end;
 end;
 

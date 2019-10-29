@@ -6,11 +6,10 @@ interface
 
 uses
   windows, LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms, Dialogs,
-  StdCtrls, ExtCtrls, Menus, CEFuncProc, StrUtils, types, ComCtrls, LResources,
-  NewKernelHandler, SynEdit, SynHighlighterCpp, SynHighlighterAA, LuaSyntax, disassembler,
-  MainUnit2, Assemblerunit, autoassembler, symbolhandler, SynEditSearch, SynPluginMultiCaret,
-  MemoryRecordUnit, tablist, customtypehandler, registry, SynGutterBase, SynEditMarks,
-  luahandler, memscan, foundlisthelper, ProcessHandlerUnit, commonTypeDefs;
+  StdCtrls, ExtCtrls, Menus, MemoryRecordUnit, commonTypeDefs, customtypehandler,
+  disassembler, symbolhandler, symbolhandlerstructs, SynEdit, SynHighlighterCpp,
+  SynHighlighterAA, LuaSyntax, SynPluginMultiCaret, SynEditSearch, tablist,
+  SynGutterBase, SynEditMarks;
 
 
 type TCallbackRoutine=procedure(memrec: TMemoryRecord; script: string; changed: boolean) of object;
@@ -80,11 +79,15 @@ type
   { TfrmAutoInject }
 
   TfrmAutoInject = class(TForm)
+    aaImageList: TImageList;
     MainMenu1: TMainMenu;
     File1: TMenuItem;
     menuAOBInjection: TMenuItem;
     menuFullInjection: TMenuItem;
     MenuItem1: TMenuItem;
+    MenuItem2: TMenuItem;
+    MenuItem3: TMenuItem;
+    miRedo: TMenuItem;
     mifindNext: TMenuItem;
     miCallLua: TMenuItem;
     miNewWindow: TMenuItem;
@@ -114,23 +117,27 @@ type
     Injectincurrentprocess1: TMenuItem;
     Injectintocurrentprocessandexecute1: TMenuItem;
     Find1: TMenuItem;
-    Paste1: TMenuItem;
-    Copy1: TMenuItem;
-    Cut1: TMenuItem;
-    Undo1: TMenuItem;
+    miPaste: TMenuItem;
+    miCopy: TMenuItem;
+    miCut: TMenuItem;
+    miUndo: TMenuItem;
     N6: TMenuItem;
     FindDialog1: TFindDialog;
     undotimer: TTimer;
     View1: TMenuItem;
     AAPref1: TMenuItem;
     procedure Button1Click(Sender: TObject);
+    procedure FormDropFiles(Sender: TObject; const FileNames: array of String);
     procedure Load1Click(Sender: TObject);
     procedure menuAOBInjectionClick(Sender: TObject);
     procedure menuFullInjectionClick(Sender: TObject);
     procedure MenuItem1Click(Sender: TObject);
+    procedure MenuItem2Click(Sender: TObject);
+    procedure MenuItem3Click(Sender: TObject);
     procedure mifindNextClick(Sender: TObject);
     procedure miCallLuaClick(Sender: TObject);
     procedure miNewWindowClick(Sender: TObject);
+    procedure miRedoClick(Sender: TObject);
     procedure ReplaceDialog1Find(Sender: TObject);
     procedure ReplaceDialog1Replace(Sender: TObject);
     procedure Save1Click(Sender: TObject);
@@ -156,14 +163,14 @@ type
     procedure Close1Click(Sender: TObject);
     procedure Injectincurrentprocess1Click(Sender: TObject);
     procedure Injectintocurrentprocessandexecute1Click(Sender: TObject);
-    procedure Cut1Click(Sender: TObject);
-    procedure Copy1Click(Sender: TObject);
-    procedure Paste1Click(Sender: TObject);
+    procedure miCutClick(Sender: TObject);
+    procedure miCopyClick(Sender: TObject);
+    procedure miPasteClick(Sender: TObject);
     procedure Find1Click(Sender: TObject);
     procedure FindDialog1Find(Sender: TObject);
     procedure AAPref1Click(Sender: TObject);
     procedure FormDestroy(Sender: TObject);
-    procedure Undo1Click(Sender: TObject);
+    procedure miUndoClick(Sender: TObject);
   private
     { Private declarations }
 
@@ -181,8 +188,9 @@ type
 
 
     fScriptMode: TScriptMode;
-    fluamode: boolean;
     fCustomTypeScript: boolean;
+
+    shownonce: boolean;
 
     procedure setluamode(state: boolean);
     procedure setScriptMode(mode: TScriptMode);
@@ -209,8 +217,11 @@ type
     callbackroutine: TCallbackroutine;
     CustomTypeCallback: TCustomCallbackroutine;
     injectintomyself: boolean;
+
+    procedure reloadHighlighterSettings;
     procedure addTemplate(id: integer);
     procedure removeTemplate(id: integer);
+    procedure loadfile(filename: string);
     property CustomTypeScript: boolean read fCustomTypeScript write setCustomTypeScript;
   published
     property ScriptMode: TScriptMode read fScriptMode write setScriptMode;
@@ -229,11 +240,16 @@ procedure unregisterAutoAssemblerTemplate(id: integer);
 function GetUniqueAOB(mi: TModuleInfo; address: ptrUint; codesize: Integer; var resultOffset: Integer) : string;
 
 
+procedure ReloadAllAutoInjectHighlighters;
+
 implementation
 
 
 uses frmAAEditPrefsUnit,MainUnit,memorybrowserformunit,APIhooktemplatesettingsfrm,
-  Globals, Parsers, MemoryQuery, GnuAssembler, LuaCaller, SynEditTypes;
+  Globals, Parsers, MemoryQuery, GnuAssembler, LuaCaller, SynEditTypes, CEFuncProc,
+  StrUtils, types, ComCtrls, LResources, NewKernelHandler, MainUnit2, Assemblerunit,
+  autoassembler,  registry, luahandler, memscan, foundlisthelper, ProcessHandlerUnit,
+  frmLuaEngineUnit, frmSyntaxHighlighterEditor;
 
 resourcestring
   rsExecuteScript = 'Execute script';
@@ -245,7 +261,7 @@ resourcestring
   rsCEGAFilter = 'Cheat Engine GNU Assembly (*.CEGA)|*.CEGA|All Files ( *.* )|*.*';
   rsAutoAssembler = 'Auto assembler';
   rsCodeNeedsEnableAndDisable = 'The code needs an [ENABLE] and a [DISABLE] section if you want to use this script as a table entry';
-  rsNotAllCodeIsInjectable = 'Not all code is injectable.'#13#10'%s'#13#10'Are you sure you wan''t to edit it to this?';
+  rsNotAllCodeIsInjectable = 'Not all code is injectable.'#13#10'%s'#13#10'Are you sure you want to edit it to this?';
   rsCodeInjectTemplate = 'Code inject template';
   rsOnWhatAddressDoYouWantTheJump = 'On what address do you want the jump?';
   rsFailedToAddToTableNotAllCodeIsInjectable = 'Failed to add to table. Not all code is injectable';
@@ -267,7 +283,20 @@ var
   AutoAssemblerTemplates: TAutoAssemblerTemplates;
 
 
+procedure ReloadAllAutoInjectHighlighters;
+var
+  i: integer;
+  f: TCustomForm;
+  aif: TfrmAutoInject absolute f;
+begin
+  for i:=0 to screen.FormCount-1 do
+  begin
+    f:=screen.Forms[i];
+    if f is TfrmAutoInject then
+      aif.reloadHighlighterSettings;
+  end;
 
+end;
 
 function registerAutoAssemblerTemplate(name: string; m: TAutoAssemblerTemplateCallback): integer;
 var i: integer;
@@ -447,6 +476,7 @@ var
     a,b: integer;
 
     aa: TCEAllocArray;
+    exceptionlist: TCEExceptionListArray;
 
     //variables for injectintomyself:
     check: boolean;
@@ -481,8 +511,8 @@ begin
 
 
         try
-          check:=autoassemble(assemblescreen.lines,false,true,true,injectintomyself,aa,registeredsymbols,memrec) and
-                 autoassemble(assemblescreen.lines,false,false,true,injectintomyself,aa,registeredsymbols,memrec);
+          check:=autoassemble(assemblescreen.lines,false,true,true,injectintomyself,aa,exceptionlist,registeredsymbols,memrec) and
+                 autoassemble(assemblescreen.lines,false,false,true,injectintomyself,aa,exceptionlist,registeredsymbols,memrec);
 
           if not check then
             errmsg:=format(rsNotAllCodeIsInjectable,['']);
@@ -507,7 +537,16 @@ begin
             if editscript2 or CustomTypeScript then close;
           end;
         end;
-      end else autoassemble(assemblescreen.lines,true);
+      end
+      else
+      begin
+        try
+          autoassemble(assemblescreen.lines,true);
+        except
+          on e:exception do
+            MessageDlg(e.message,mtError,[mbOK],0);
+        end;
+      end;
     end;
 
     smGnuAssembler:
@@ -521,28 +560,38 @@ begin
 {$endif}
 end;
 
+procedure TfrmAutoInject.FormDropFiles(Sender: TObject; const FileNames: array of String);
+var load: boolean;
+begin
+  if length(filenames)=0 then exit;
+
+  if mainform.editedsincelastsave then
+    load:=MessageDlg('Your last changes will be lost if you proceed. Continue?',mtConfirmation,[mbyes,mbno],0,mbNo)=mryes
+  else
+    load:=true;
+
+  if load then
+    loadfile(FileNames[0]);
+end;
+
+procedure TfrmAutoInject.loadFile(filename: string);
+begin
+  assemblescreen.Lines.Clear;
+  assemblescreen.Lines.LoadFromFile(filename, true);
+  savedialog1.FileName:=filename;
+  assemblescreen.AfterLoadFromFile;
+
+  case ScriptMode of
+    smAutoAssembler: caption:=rsAutoAssembler+':'+extractfilename(opendialog1.FileName);
+    smLua: caption:=rsLUAScript+':'+extractfilename(opendialog1.FileName);
+    smGnuAssembler: caption:=rsGNUAScript+':'+extractfilename(opendialog1.FileName);
+  end;
+end;
+
 procedure TfrmAutoInject.Load1Click(Sender: TObject);
 begin
-{$ifndef standalonetrainerwithassembler}
-
   if opendialog1.Execute then
-  begin
-
-    assemblescreen.Lines.Clear;
-    assemblescreen.Lines.LoadFromFile(opendialog1.filename);
-    savedialog1.FileName:=opendialog1.filename;
-    assemblescreen.AfterLoadFromFile;
-
-    SaveDialog1.FileName:=opendialog1.FileName;
-
-    case ScriptMode of
-      smAutoAssembler: caption:=rsAutoAssembler+':'+extractfilename(opendialog1.FileName);
-      smLua: caption:=rsLUAScript+':'+extractfilename(opendialog1.FileName);
-      smGnuAssembler: caption:=rsGNUAScript+':'+extractfilename(opendialog1.FileName);
-    end;
-
-  end;
-{$endif}
+    loadFile(opendialog1.filename);
 end;
 
 procedure TfrmAutoInject.mifindNextClick(Sender: TObject);
@@ -560,6 +609,11 @@ begin
   f.scriptmode:=ScriptMode;
 
   f.show;
+end;
+
+procedure TfrmAutoInject.miRedoClick(Sender: TObject);
+begin
+  assemblescreen.Redo;
 end;
 
 procedure TfrmAutoInject.ReplaceDialog1Find(Sender: TObject);
@@ -796,10 +850,12 @@ begin
       add('');
       add(addressstring+':');
       add('jmp newmem'+inttostr(injectnr)+'');
-      while codesize>5 do
+      if codesize>5 then
       begin
-        add('nop');
-        dec(codesize);
+        if codesize-5>1 then
+          add('nop '+inttohex(codesize-5,1))
+        else
+          add('nop');
       end;
 
       add('returnhere'+inttostr(injectnr)+':');
@@ -905,15 +961,13 @@ procedure TfrmAutoInject.assemblescreenChange(Sender: TObject);
 begin
   if self=mainform.frmLuaTableScript then
     mainform.editedsincelastsave:=true;
-
-
 end;
-
 
 
 procedure TfrmAutoInject.Assigntocurrentcheattable1Click(Sender: TObject);
 var a,b: integer;
     aa:TCEAllocArray;
+    exceptionlist:TCEExceptionListArray;
     registeredsymbols: TStringlist;
 begin
   registeredsymbols:=tstringlist.Create;
@@ -927,8 +981,8 @@ begin
     getenableanddisablepos(assemblescreen.Lines,a,b);
     if (a=-1) and (b=-1) then raise exception.create(rsCodeNeedsEnableAndDisable);
 
-    if autoassemble(assemblescreen.lines,false,true,true,false,aa,registeredsymbols) and
-       autoassemble(assemblescreen.lines,false,false,true,false,aa,registeredsymbols) then
+    if autoassemble(assemblescreen.lines,false,true,true,false,aa,exceptionlist,registeredsymbols) and
+       autoassemble(assemblescreen.lines,false,false,true,false,aa,exceptionlist,registeredsymbols) then
     begin
       //add a entry with type 255
       mainform.AddAutoAssembleScript(assemblescreen.text);
@@ -964,6 +1018,7 @@ begin
   end;
 
   jumppart.Add('jmp '+inttohex(addressto,8));
+
 
   for i:=jumpsize to x-y-1 do
     jumppart.Add('nop');
@@ -1108,7 +1163,7 @@ begin
       disablescript.Add(x);
     end;
 
-    freemem(originalcodebuffer);
+    freememandnil(originalcodebuffer);
     originalcodebuffer:=nil;
 
 
@@ -1364,7 +1419,36 @@ begin
 end;
 
 procedure TfrmAutoInject.FormShow(Sender: TObject);
+var
+  reg: Tregistry;
 begin
+  if shownonce=false then
+  begin
+    if overridefont<>nil then
+      assemblescreen.Font.assign(overridefont)
+    else
+      assemblescreen.Font.Size:=10;
+
+    reg:=tregistry.create;
+    try
+      if reg.OpenKey('\Software\Cheat Engine\Auto Assembler\',false) then
+      begin
+        if reg.valueexists('Font.name') then
+          assemblescreen.Font.Name:=reg.readstring('Font.name');
+
+        if reg.valueexists('Font.size') then
+          assemblescreen.Font.size:=reg.ReadInteger('Font.size');
+
+        if reg.valueexists('Font.quality') then
+          assemblescreen.Font.quality:=TFontQuality(reg.ReadInteger('Font.quality'));
+      end;
+    finally
+      reg.free;
+    end;
+
+    shownonce:=true;
+  end;
+
   if editscript then
     button1.Caption:=strOK;
 
@@ -1674,6 +1758,8 @@ var
   i: integer;
   x: array of integer;
   reg: tregistry;
+
+  fq: TFontQuality;
 begin
 
 
@@ -1690,7 +1776,7 @@ begin
   CPPHighlighter:=TSynCppSyn.create(self);
   LuaHighlighter:=TSynLuaSyn.Create(self);
 
-
+  reloadHighlighterSettings;
 
   assembleSearch:=TSyneditSearch.Create;
 
@@ -1706,7 +1792,16 @@ begin
   assemblescreen:=TSynEdit.Create(self);
   assemblescreen.Highlighter:=AAHighlighter;
   assemblescreen.Options:=SYNEDIT_DEFAULT_OPTIONS - [eoScrollPastEol]+[eoTabIndent]+[eoKeepCaretX];
-  assemblescreen.Font.Quality:=fqDefault;
+  fq:=assemblescreen.Font.Quality;
+  if not (fq in [fqCleartypeNatural, fqDefault]) then
+    assemblescreen.Font.quality:=fqDefault;
+
+ { if overridefont<>nil then
+    assemblescreen.Font.assign(overridefont)
+  else
+    assemblescreen.Font.Size:=10;    }
+
+  //assemblescreen.Font.Quality:=fqDefault;
   assemblescreen.WantTabs:=true;
   assemblescreen.TabWidth:=4;
 
@@ -1732,6 +1827,7 @@ begin
 
   assemblescreen.OnChange:=assemblescreenchange;
 
+
   setlength(x,0);
   loadformposition(self,x);
 
@@ -1739,15 +1835,6 @@ begin
   try
     if reg.OpenKey('\Software\Cheat Engine\Auto Assembler\',false) then
     begin
-      if reg.valueexists('Font.name') then
-        assemblescreen.Font.Name:=reg.readstring('Font.name');
-
-      if reg.valueexists('Font.size') then
-        assemblescreen.Font.size:=reg.ReadInteger('Font.size');
-
-      if reg.valueexists('Font.quality') then
-        assemblescreen.Font.quality:=TFontQuality(reg.ReadInteger('Font.quality'));
-
       if reg.valueexists('Show Line Numbers') then
         assemblescreen.Gutter.linenumberpart.visible:=reg.ReadBool('Show Line Numbers');
 
@@ -1789,9 +1876,9 @@ begin
   Syntaxhighlighting1.checked:=not Syntaxhighlighting1.checked;
   if Syntaxhighlighting1.checked then //enable
   begin
-    if fluamode then
+    if ScriptMode=smLua then
       assemblescreen.Highlighter:=LuaHighlighter
-    else
+    else if ScriptMode=smAutoAssembler then
       assemblescreen.Highlighter:=AAHighlighter
   end
   else //disabl
@@ -2004,17 +2091,17 @@ begin
   injectscript(true);
 end;
 
-procedure TfrmAutoInject.Cut1Click(Sender: TObject);
+procedure TfrmAutoInject.miCutClick(Sender: TObject);
 begin
   assemblescreen.CutToClipboard;
 end;
 
-procedure TfrmAutoInject.Copy1Click(Sender: TObject);
+procedure TfrmAutoInject.miCopyClick(Sender: TObject);
 begin
   assemblescreen.CopyToClipboard;
 end;
 
-procedure TfrmAutoInject.Paste1Click(Sender: TObject);
+procedure TfrmAutoInject.miPasteClick(Sender: TObject);
 begin
   assemblescreen.PasteFromClipboard;
 end;
@@ -2081,12 +2168,12 @@ procedure TfrmAutoInject.FormDestroy(Sender: TObject);
 begin
   //if editscript or editscript2 then
   begin
-    saveformposition(self,[]);
+    saveformposition(self);
 
   end;
 end;
 
-procedure TfrmAutoInject.Undo1Click(Sender: TObject);
+procedure TfrmAutoInject.miUndoClick(Sender: TObject);
 begin
   assemblescreen.Undo;
 end;
@@ -2242,10 +2329,12 @@ begin
       add('');
       add('address'+nr+':');
       add('  jmp newmem'+nr+'');
-      while codesize>5 do
+      if codesize>5 then
       begin
-        add('  nop');
-        dec(codesize);
+        if codesize-5>1 then
+          add('  nop '+inttohex(codesize-5,1))
+        else
+          add('  nop');
       end;
 
       add('return'+nr+':');
@@ -2360,6 +2449,46 @@ end;
 procedure TfrmAutoInject.MenuItem1Click(Sender: TObject);
 begin
   ReplaceDialog1.execute;
+end;
+
+procedure TfrmAutoInject.reloadHighlighterSettings;
+begin
+  LuaHighlighter.LoadFromRegistry(HKEY_CURRENT_USER, '\Software\Cheat Engine\Lua Highlighter');
+  AAHighlighter.LoadFromRegistry(HKEY_CURRENT_USER, '\Software\Cheat Engine\AA Highlighter');
+end;
+
+procedure TfrmAutoInject.MenuItem2Click(Sender: TObject);
+var
+  frmHighlighterEditor: TfrmHighlighterEditor;
+begin
+  frmHighlighterEditor:=TfrmHighlighterEditor.create(self);
+  LuaHighlighter.LoadFromRegistry(HKEY_CURRENT_USER, '\Software\Cheat Engine\Lua Highlighter');
+  frmHighlighterEditor.highlighter:=LuaHighlighter;
+  if frmHighlighterEditor.showmodal=mrok then
+  begin
+    LuaHighlighter.SaveToRegistry(HKEY_CURRENT_USER, '\Software\Cheat Engine\Lua Highlighter');
+    reloadHighlighterSettings;
+    ReloadAllLuaEngineHighlighters;
+  end;
+
+  frmHighlighterEditor.free;
+
+end;
+
+procedure TfrmAutoInject.MenuItem3Click(Sender: TObject);
+var
+  frmHighlighterEditor: TfrmHighlighterEditor;
+begin
+  frmHighlighterEditor:=TfrmHighlighterEditor.create(self);
+  AAHighlighter.LoadFromRegistry(HKEY_CURRENT_USER, '\Software\Cheat Engine\AA Highlighter');
+  frmHighlighterEditor.highlighter:=AAHighlighter;
+  if frmHighlighterEditor.showmodal=mrok then
+  begin
+    AAHighlighter.SaveToRegistry(HKEY_CURRENT_USER, '\Software\Cheat Engine\AA Highlighter');
+    ReloadAllAutoInjectHighlighters;
+  end;
+
+  frmHighlighterEditor.free;
 end;
 
 procedure GenerateAOBInjectionScript(script: TStrings; address: string; symbolname: string);
@@ -2522,8 +2651,14 @@ begin
       add('');
       add(symbolNameWithOffset + ':');
       add('  jmp newmem' + nr + '');
-      for i := 6 to codesize do
-        add('  nop');
+      if codesize>5 then
+      begin
+        if codesize-5>1 then
+          add('  nop '+inttohex(codesize-5,1))
+        else
+          add('  nop');
+      end;
+
       add('return' + nr + ':');
       add('registersymbol(' + symbolName + ')');
       add('');
@@ -2939,10 +3074,15 @@ var
 begin
   setlength(result, size);
 
-  pos1:=0;
+
+  pos1:=Disassembler.LastDisassembleData.prefixsize;
   for i:=0 to Disassembler.LastDisassembleData.SeperatorCount-1 do
   begin
     pos2:=Disassembler.LastDisassembleData.Seperators[i];
+    if pos2>size then
+      pos2:=size;
+
+
     mask:=(pos2<=size) and (pos2-pos1=4) and (abs(pinteger(@Disassembler.LastDisassembleData.Bytes[pos1])^)>=$10000); //value is bigger than 65535 (positive and negative)
 
     for index := pos1 to pos2-1 do

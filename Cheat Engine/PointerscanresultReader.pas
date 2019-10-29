@@ -22,7 +22,7 @@ type TPointerscanResult=packed record
   modulenr: integer;
   moduleoffset: int64;
   offsetcount: integer;
-  offsets: array [0..1000] of dword;
+  offsets: array [0..1000] of integer;
 end;
 type PPointerscanResult= ^TPointerscanResult;
 
@@ -46,7 +46,7 @@ type
     end;
 
     cacheStart: integer;
-    cacheSize: integer;
+    cacheSize: size_t;
     cache: pointer;
 
     cacheStart2: integer;
@@ -202,13 +202,13 @@ begin
   begin
     it.GetData(fn);
     rs.add(fn);
-    freemem(fn);
+    freememandnil(fn);
     it.Next;
   end;
 
   it.free;
   filemap.Clear;
-  filemap.Free;
+  freeandnil(filemap);
 
 end;
 
@@ -298,10 +298,6 @@ begin
 
   if i>=fcount then exit;
 
-
-
-
-
   //find which file to use
   for j:=0 to length(files)-1 do
   begin
@@ -318,8 +314,11 @@ begin
       else
         offset:=wantedoffset;
 
-
-      cachesize:=min(files[j].filesize-offset, systeminfo.dwAllocationGranularity*32);    //normally 2MB
+{$if FPC_FULLVERSION<30200}
+      cachesize:=min(files[j].filesize-offset, systeminfo.dwAllocationGranularity*32);    //normally 2MBZ
+{$else}
+      cachesize:=min(files[j].filesize-offset, qword(systeminfo.dwAllocationGranularity*32));    //normally 2MBZ
+{$endif}
       if cache2<>nil then
         unmapviewoffile(cache2);
 
@@ -726,7 +725,7 @@ begin
  // getmem(cache2, sizeofEntry*maxcachecount);
   InitializeCache(0);
 
-  freemem(temppchar);
+  freememandnil(temppchar);
   configfile.Free;
 
 
@@ -763,10 +762,10 @@ begin
   ReleaseFiles;
 
   if compressedTempBuffer<>nil then
-    freemem(compressedTempBuffer);
+    freememandnil(compressedTempBuffer);
 
   if compressedPointerScanResult<>nil then
-    freemem(compressedPointerScanResult);
+    freememandnil(compressedPointerScanResult);
 
 end;
 

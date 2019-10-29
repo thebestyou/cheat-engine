@@ -1,4 +1,4 @@
-#pragma warning( disable: 4103)
+#pragma warning( disable: 4100 4103 4706)
 
 #include "ntifs.h"
 #include "processlist.h"
@@ -31,7 +31,7 @@ RTL_GENERIC_COMPARE_RESULTS NTAPI ProcessListCompare(__in struct _RTL_GENERIC_TA
 
 PVOID NTAPI ProcessListAlloc(__in struct _RTL_GENERIC_TABLE *Table, __in CLONG ByteSize)
 {
-	PVOID r=ExAllocatePoolWithTag(PagedPool, ByteSize, 0);
+	PVOID r=ExAllocatePool(PagedPool, ByteSize);
 	RtlZeroMemory(r, ByteSize);
 
 	//DbgPrint("ProcessListAlloc %d",(int)ByteSize);
@@ -41,13 +41,12 @@ PVOID NTAPI ProcessListAlloc(__in struct _RTL_GENERIC_TABLE *Table, __in CLONG B
 VOID NTAPI ProcessListDealloc(__in struct _RTL_GENERIC_TABLE *Table, __in __drv_freesMem(Mem) __post_invalid PVOID Buffer)
 {
 	//DbgPrint("ProcessListDealloc");
-	ExFreePoolWithTag(Buffer, 0);
+	ExFreePool(Buffer);
 }
 
 
 VOID GetThreadData(IN PDEVICE_OBJECT  DeviceObject, IN PVOID  Context)
 {
-	KIRQL OldIrql;
 	struct ThreadData *tempThreadEntry;
 	PETHREAD selectedthread;
 	HANDLE tid;
@@ -94,8 +93,6 @@ VOID GetThreadData(IN PDEVICE_OBJECT  DeviceObject, IN PVOID  Context)
 
 VOID CreateThreadNotifyRoutine(IN HANDLE  ProcessId,IN HANDLE  ThreadId,IN BOOLEAN  Create)
 {
-	PETHREAD CurrentThread;	
-
 	if (KeGetCurrentIrql()==PASSIVE_LEVEL)
 	{
 		/*if (DebuggedProcessID==(ULONG)ProcessId)
@@ -148,52 +145,58 @@ VOID CreateProcessNotifyRoutine(IN HANDLE  ParentId, IN HANDLE  ProcessId, IN BO
 		//aquire a spinlock
 		if (ExAcquireResourceExclusiveLite(&ProcesslistR, TRUE))
 		{
+
+			if (PsLookupProcessByProcessId((PVOID)ProcessId, &CurrentProcess) != STATUS_SUCCESS)
+			{
+				ExReleaseResourceLite(&ProcesslistR);
+				return;
+			}
+
 			if ((ProcessWatcherOpensHandles) && (WatcherProcess))
 			{
-				if (PsLookupProcessByProcessId((PVOID)ProcessId, &CurrentProcess) == STATUS_SUCCESS)
+				
+				
+				if (Create)
 				{
-					if (Create)
+					//Open a handle to this process
+
+					/*
+						
+					HANDLE ph = 0;
+					NTSTATUS r = ObOpenObjectByPointer(CurrentProcess, 0, NULL, PROCESS_ALL_ACCESS, *PsProcessType, KernelMode, &ph);
+
+					DbgPrint("CreateProcessNotifyRoutine: ObOpenObjectByPointer=%x  ph=%x", r, ph);
+					r = ZwDuplicateObject(ZwCurrentProcess(), ph, WatcherHandle, &ProcessHandle, PROCESS_ALL_ACCESS, 0, DUPLICATE_CLOSE_SOURCE);
+
+					DbgPrint("CreateProcessNotifyRoutine: ZwDuplicateObject=%x (handle=%x)", r, ProcessHandle);
+					*/
+						
+					KAPC_STATE oldstate;
+
+						
+					KeStackAttachProcess((PKPROCESS)WatcherProcess, &oldstate);						
+					__try
 					{
-						//Open a handle to this process
-
-						/*
-						
-						HANDLE ph = 0;
-						NTSTATUS r = ObOpenObjectByPointer(CurrentProcess, 0, NULL, PROCESS_ALL_ACCESS, *PsProcessType, KernelMode, &ph);
-
-						DbgPrint("CreateProcessNotifyRoutine: ObOpenObjectByPointer=%x  ph=%x", r, ph);
-						r = ZwDuplicateObject(ZwCurrentProcess(), ph, WatcherHandle, &ProcessHandle, PROCESS_ALL_ACCESS, 0, DUPLICATE_CLOSE_SOURCE);
-
-						DbgPrint("CreateProcessNotifyRoutine: ZwDuplicateObject=%x (handle=%x)", r, ProcessHandle);
-						*/
-						
-						KAPC_STATE oldstate;
-						ObReferenceObject(CurrentProcess);
-
-						
-						KeStackAttachProcess((PKPROCESS)WatcherProcess, &oldstate);						
 						__try
 						{
-							__try
-							{
-								ObOpenObjectByPointer(CurrentProcess, 0, NULL, PROCESS_ALL_ACCESS, *PsProcessType, KernelMode, &ProcessHandle);
-							}
-							__except (1)
-							{
-								DbgPrint("Exception during ObOpenObjectByPointer");
-							}
+							ObOpenObjectByPointer(CurrentProcess, 0, NULL, PROCESS_ALL_ACCESS, *PsProcessType, KernelMode, &ProcessHandle);
 						}
-						__finally
+						__except (1)
 						{
-							KeUnstackDetachProcess(&oldstate);
+							DbgPrint("Exception during ObOpenObjectByPointer");
 						}
-					
 					}
+					__finally
+					{
+						KeUnstackDetachProcess(&oldstate);
+					}
+					
 				}
+				
 
 				if (InternalProcessList == NULL)
 				{
-					InternalProcessList = ExAllocatePoolWithTag(PagedPool, sizeof(RTL_GENERIC_TABLE), 0);
+					InternalProcessList = ExAllocatePool(PagedPool, sizeof(RTL_GENERIC_TABLE));
 					if (InternalProcessList)
 						RtlInitializeGenericTable(InternalProcessList, ProcessListCompare, ProcessListAlloc, ProcessListDealloc, NULL);
 				}
@@ -221,12 +224,12 @@ VOID CreateProcessNotifyRoutine(IN HANDLE  ParentId, IN HANDLE  ProcessId, IN BO
 						r = RtlInsertElementGenericTable(InternalProcessList, &d, sizeof(d), &newElement);
 
 
-						DbgPrint("Added handle %x for pid %d to the list (newElement=%d r=%p)", (int)d.ProcessHandle, (int)d.ProcessID, newElement, r);
+						DbgPrint("Added handle %x for pid %d to the list (newElement=%d r=%p)", (int)(UINT_PTR)d.ProcessHandle, (int)(UINT_PTR)d.ProcessID, newElement, r);
 					}
 					else
 					{
 						//remove it from the list (if it's there)
-						DbgPrint("Process %d destruction. r=%p", (int)d.ProcessID, r);
+						DbgPrint("Process %d destruction. r=%p", (int)(UINT_PTR)d.ProcessID, r);
 						if (r)
 						{
 							DbgPrint("Process that was in the list has been closed");
@@ -268,7 +271,7 @@ VOID CreateProcessNotifyRoutine(IN HANDLE  ParentId, IN HANDLE  ProcessId, IN BO
 
 					//allocate a block of memory for the processlist
 
-					tempProcessEntry = ExAllocatePoolWithTag(PagedPool, sizeof(struct ProcessData), 0);
+					tempProcessEntry = ExAllocatePool(PagedPool, sizeof(struct ProcessData));
 					tempProcessEntry->ProcessID = ProcessId;
 					tempProcessEntry->PEProcess = CurrentProcess;
 					tempProcessEntry->Threads = NULL;
@@ -382,7 +385,7 @@ HANDLE GetHandleForProcessID(IN HANDLE ProcessID)
 		r = RtlLookupElementGenericTable(InternalProcessList, &d);
 		if (r)
 		{
-			DbgPrint("Found a handle for PID %d (%x)", (int)ProcessID, (int)r->ProcessHandle);
+			DbgPrint("Found a handle for PID %d (%x)", (int)(UINT_PTR)ProcessID, (int)(UINT_PTR)r->ProcessHandle);
 			return r->ProcessHandle; // r->ProcessHandle;
 		}	
 	}	
@@ -415,7 +418,7 @@ VOID CleanProcessList()
 				RtlDeleteElementGenericTable(InternalProcessList, li);
 			}
 			
-			ExFreePoolWithTag(InternalProcessList, 0);
+			ExFreePool(InternalProcessList);
 			InternalProcessList = NULL;
 		}
 		ExReleaseResourceLite(&ProcesslistR);

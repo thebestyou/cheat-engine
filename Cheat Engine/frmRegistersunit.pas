@@ -23,6 +23,7 @@ type
     EIPlabel: TLabel;
     ESIlabel: TLabel;
     ESPlabel: TLabel;
+    rImageList: TImageList;
     MenuItem1: TMenuItem;
     MenuItem2: TMenuItem;
     Panel1: TPanel;
@@ -224,7 +225,7 @@ begin
   if _stack<>nil then
   begin
     if stack.stack<>nil then //free old stack copy
-      freemem(stack.stack);
+      freememandnil(stack.stack);
 
     getmem(stack.stack, stacksize);
     stack.savedsize:=stacksize;
@@ -254,7 +255,7 @@ begin
   begin
     if (sender is TLabel) then
     begin
-      s:=tlabel(sender).Caption;
+      s:=trim(tlabel(sender).Caption);
       i:=pos(' ',s);
       if i>0 then //should always be true
       begin
@@ -286,7 +287,7 @@ begin
   panel3.Font.Height:=i;
 
 
-  widthneeded:=canvas.TextWidth(' '+caption+' ');
+  widthneeded:=canvas.TextWidth('XX  '+caption+'  XX');
   constraints.MinWidth:=widthneeded;
 
   if WindowsVersion>=wvVista then
@@ -379,7 +380,7 @@ begin
   end;
 
   if stack.stack<>nil then
-    freemem(stack.stack);
+    freememandnil(stack.stack);
 
   action:=cafree;
 end;

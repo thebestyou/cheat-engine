@@ -6,7 +6,8 @@ interface
 
 uses
   LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
-  Dialogs, StdCtrls,symbolhandler, ComCtrls, ExtCtrls, Menus, LResources;
+  Dialogs, StdCtrls,symbolhandler, symbolhandlerstructs, ComCtrls, ExtCtrls,
+  Menus, LResources;
 
 type
 
@@ -14,6 +15,7 @@ type
 
   TfrmSymbolhandler = class(TForm)
     edtSymbolname: TEdit;
+    scImageList: TImageList;
     Label3: TLabel;
     MenuItem1: TMenuItem;
     Panel1: TPanel;
@@ -91,7 +93,7 @@ begin
           li.SubItems.Add(inttohex(dword(extradata^.allocsize),8));
       end;
 
-      freemem(extradata);
+      freememandnil(extradata);
     end;
   finally
     sl.free;

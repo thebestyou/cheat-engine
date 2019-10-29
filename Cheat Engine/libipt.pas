@@ -176,7 +176,7 @@ type
 var
   pt_image_alloc:function(name: pchar): PPT_Image;  cdecl;
   pt_image_free:procedure(img: PPT_Image); cdecl;
-  pt_image_set_callback: function(img: PPT_Image; callback: Tread_memory_callback; context: pointer): integer; cdecl;
+  pt_image_set_callback: function(img: PPT_Image; callback: pointer{Tread_memory_callback}; context: pointer): integer; cdecl;
 
   pt_cpu_read:function (cpu: ppt_cpu): integer; cdecl;
   pt_cpu_errata: function(errata: ppt_errata; cpu: ppt_cpu): integer; cdecl;
@@ -250,7 +250,7 @@ begin
       pt_qry_indirect_branch:=GetProcAddress(hLibIPT, 'pt_qry_indirect_branch');
       pt_qry_get_offset:=GetProcAddress(hLibIPT, 'pt_qry_get_offset');
       pt_qry_event:=GetProcAddress(hLibIPT, 'pt_qry_event');
-      pt_qry_cond_branch:=GetProcAddress(hLibIPT, 'pt_qry_event');
+      pt_qry_cond_branch:=GetProcAddress(hLibIPT, 'pt_qry_cond_branch');
     end;
   end;
 

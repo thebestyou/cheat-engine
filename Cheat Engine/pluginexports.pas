@@ -124,9 +124,10 @@ function ce_getProperty(c: tobject; propertyname: pchar; value: pchar; maxsize: 
 
 implementation
 
-uses MainUnit,MainUnit2, AdvancedOptionsUnit, Assemblerunit,disassembler,frmModifyRegistersUnit,
-     formsettingsunit, symbolhandler,frmautoinjectunit, manualModuleLoader,
-     MemoryRecordUnit, MemoryBrowserFormUnit, LuaHandler, ProcessHandlerUnit, ProcessList;
+uses MainUnit,MainUnit2, AdvancedOptionsUnit, Assemblerunit,disassembler,
+     frmModifyRegistersUnit, formsettingsunit, symbolhandler,frmautoinjectunit,
+     manualModuleLoader, MemoryRecordUnit, MemoryBrowserFormUnit, LuaHandler,
+     ProcessHandlerUnit, ProcessList, BreakpointTypeDef;
 
 resourcestring
   rsLoadModuleFailed = 'LoadModule failed';
@@ -435,15 +436,18 @@ begin
 end;
 
 function ce_sym_addressToName(address:ptrUint; name: pchar; maxnamesize: integer):BOOL; stdcall;
-var s: string;
+var
+  s: string;
+  l: integer;
 begin
   result:=false;
   try
     s:=symhandler.getNameFromAddress(address,true,true);
-    if length(s)<maxnamesize then
-      copymemory(name,@s[1],length(s))
-    else
-      copymemory(name,@s[1],maxnamesize);
+
+    l:=min(maxnamesize-1, length(s));
+    copymemory(name,@s[1],l);
+
+    name[l]:=#0;
       
     result:=true;
   except
@@ -1545,7 +1549,7 @@ begin
   if debuggerthread<>nil then
   begin
     if ContinueOption=co_stepover then
-      MemoryBrowser.StepOver1Click(memorybrowser.stepover1) //use the memorybrowser step code for this case. Based on the debugstate and not gui state so should work
+      MemoryBrowser.miDebugStepOver.Click //use the memorybrowser step code for this case. Based on the debugstate and not gui state so should work
     else
       debuggerthread.ContinueDebugging(continueoption);
 
@@ -2482,8 +2486,8 @@ begin
     end;
     if pp<>nil then
     begin
-      freemem(pp);
-      pp:=nil;
+      freememandnil(pp);
+
     end;
 
   except

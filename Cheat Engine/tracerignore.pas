@@ -5,7 +5,7 @@ unit tracerIgnore;
 interface
 
 uses
-  Classes, SysUtils, symbolhandler, cefuncproc, globals;
+  Classes, SysUtils, symbolhandler, symbolhandlerstructs, cefuncproc, globals;
 
 type
   TTracerIgnore=class
@@ -23,6 +23,7 @@ var IgnoredModuleListHandler: TTracerIgnore;
 
 implementation
 
+
 procedure TTracerIgnore.loadIgnoredModules;
 var
   s: string;
@@ -39,7 +40,7 @@ begin
     donottrace:=tstringlist.create;
 
     try
-      donottrace.LoadFromFile(s);
+      donottrace.LoadFromFile(s, true);
 
       i:=0;
       while i<donottrace.Count do

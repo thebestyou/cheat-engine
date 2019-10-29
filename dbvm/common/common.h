@@ -10,6 +10,7 @@
 #define ULONG unsigned int
 #define DWORD unsigned int
 #define UINT64 unsigned long long
+#define QWORD unsigned long long
 #define NULL 0
 
 typedef struct _criticalSection
@@ -17,9 +18,10 @@ typedef struct _criticalSection
   int locked;
   int apicid;
   int lockcount;
+
 } criticalSection, *PcriticalSection;
 
-	
+extern int debugzeromem;
 
 extern char inportb(short int port) __attribute__((stdcall));
 extern void outportb(short int port, char value) __attribute__((stdcall));

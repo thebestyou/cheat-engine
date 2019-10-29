@@ -42,6 +42,7 @@ type
   TfrmProcessWatcher = class(TForm)
     btnAttach: TButton;
     btnOpen: TButton;
+    pwImageList: TImageList;
     Panel2: TPanel;
     tvProcesslist: TTreeView;
     Panel1: TPanel;
@@ -239,8 +240,8 @@ begin
             end;
           end;
         finally
-          freemem(processname);
-          processname:=nil;
+          freememandnil(processname);
+
         end;
       end;
 
@@ -330,8 +331,8 @@ begin
 
   end;
 
-  freemem(processevents);
-  freemem(threadevents);
+  freememandnil(processevents);
+  freememandnil(threadevents);
 end;
 
 //-------------------------------------------------

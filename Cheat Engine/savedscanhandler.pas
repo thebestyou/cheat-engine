@@ -660,7 +660,7 @@ begin
       p:=0;
       for i:=0 to maxnumberofregions-1 do
       begin
-        maxregionsize:=max(maxregionsize, pm[i].memorysize);
+        maxregionsize:=max(maxregionsize, integer(pm[i].memorysize));
         pm[i].startaddress:=pointer(p); //set the offset in the file (if it wasn't set already)
         inc(p, pm[i].MemorySize);
       end;
@@ -723,14 +723,14 @@ procedure TSavedScanHandler.cleanup;
 begin
   if SavedScanmemory<>nil then
   begin
-    freemem(SavedScanmemory);
-    SavedScanmemory:=nil;
+    freememandnil(SavedScanmemory);
+
   end;
 
   if addresslistmemory<>nil then
   begin
-    freemem(addresslistmemory);
-    addresslistmemory:=nil;
+    freememandnil(addresslistmemory);
+
   end;
 
   if SavedScanaddressFS<>nil then

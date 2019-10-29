@@ -1,6 +1,7 @@
 unit PointerscannerSettingsFrm;
 
 {$MODE Delphi}
+{$warn 3057 off}
 
 interface
 
@@ -114,6 +115,7 @@ type
     cbCompareToOtherPointermaps: TCheckBox;
     cbShowAdvancedOptions: TCheckBox;
     cbAddress: TComboBox;
+    cbNegativeOffsets: TCheckBox;
     ComboBox1: TComboBox;
     editMaxLevel: TEdit;
     editStructsize: TEdit;
@@ -169,6 +171,7 @@ type
     procedure cbAllowRuntimeWorkersChange(Sender: TObject);
     procedure cbMaxOffsetsPerNodeChange(Sender: TObject);
     procedure cbMustEndWithSpecificOffsetChange(Sender: TObject);
+    procedure cbNegativeOffsetsChange(Sender: TObject);
     procedure cbShowAdvancedOptionsChange(Sender: TObject);
     procedure cbStaticOnlyChange(Sender: TObject);
     procedure cbStaticStacksChange(Sender: TObject);
@@ -241,7 +244,7 @@ var frmpointerscannersettings: tfrmpointerscannersettings;
 implementation
 
 uses MainUnit, frmMemoryAllocHandlerUnit, MemoryBrowserFormUnit, ProcessHandlerUnit,
-  Globals, parsers;
+  Globals, parsers, DPIHelper;
 
 
 
@@ -259,7 +262,7 @@ resourcestring
   strMaxOffsetsIsStupid = 'Sorry, but the max offsets should be 1 or higher, or else disable the checkbox'; //'Are you a fucking retard?';
   rsUseLoadedPointermap = 'Use saved pointermap';
 
-  rsNoCompareFiles = 'You will get billions of useless results and giga/terrabytes of wasted diskspace if you do not use the compare results with other saved pointermap option. Are you sure ?';
+  rsNoCompareFiles = 'If you do not use the compare results with other saved pointermap option you will get billions of useless results and giga/terrabytes of wasted diskspace and rescans will take hours if not days. Are you sure ?';
   rsSelectAFile = '<Select a file>';
   rsScandataFilter = 'All files (*.*)|*.*|Scan Data (*.scandata)|*.scandata';
   rsReusedTheSameFile = 'This file is already in the list of scandata files to be used'; //alternatively: 'For fucks sake dude. You already picked this file. Pick something else!'
@@ -341,6 +344,7 @@ begin
 
   btnDelete:=TSpeedButton.Create(self);
   btnDelete.OnClick:=btnDeleteClick;
+
   cbAddress:=TComboBox.Create(self);
   cbAddress.Enabled:=false;
 
@@ -350,6 +354,8 @@ begin
   btnDelete.Anchors:=[aktop, akRight];
   btnDelete.BorderSpacing.Right:=4;
 
+
+
   bm:=tbitmap.Create;
   imagelist.GetBitmap(0, bm);
   btnDelete.Glyph:=bm;
@@ -358,7 +364,7 @@ begin
   cbAddress.parent:=self;
   cbAddress.AnchorSideRight.Control:=btnDelete;
   cbAddress.AnchorSideRight.side:=asrLeft;
-  cbAddress.Constraints.MinWidth:=TPointerFileList(aowner).canvas.TextWidth('DDDDDDDDDDDD');
+  cbAddress.Constraints.MinWidth:=TPointerFileList(aowner).canvas.TextWidth(' DDDDDDDDDDDDDDDD ');
   //cbAddress.clientwidth:=tcustomform(aowner).canvas.TextWidth('DDDDDDDDDDDD');
   cbAddress.anchors:=[aktop, akright];
   cbAddress.BorderSpacing.Right:=8;
@@ -403,6 +409,12 @@ begin
   lblFilename.Caption:=rsSelectAFile;
 
   height:=cbAddress.Height+2;
+
+
+
+
+  DPIHelper.AdjustSpeedButtonSize(btnSetFile);
+  DPIHelper.AdjustSpeedButtonSize(btnDelete);
 
 
 end;
@@ -472,7 +484,7 @@ begin
   lblfilename.ShowHint:=true;
 
   if fileexists(filename+'.addresslist') then
-    tstrings(cbAddress.tag).LoadFromFile(filename+'.addresslist');
+    tstrings(cbAddress.tag).LoadFromFile(filename+'.addresslist',true);
 
   UpdateAddressList(cbAddress);
 
@@ -678,10 +690,10 @@ end;
 procedure TfrmPointerScannerSettings.btnOkClick(Sender: TObject);
 var
   i,j: integer;
-  r: THostResolver;
-  p: ptruint;
-  comparecount: integer;
-  reg: TRegistry;
+  r: THostResolver=nil;
+  p: ptruint=0;
+  comparecount: integer=0;
+  reg: TRegistry=nil;
 begin
   if cbMaxOffsetsPerNode.checked then
   begin
@@ -713,10 +725,10 @@ begin
       end;
     end;
 
-    if comparecount=0 then
+    if (rbGeneratePointermap.checked=false) and (comparecount=0) then
     begin
       //bug the user one time about this
-      if (not warnedAboutDisablingInstantRescan) and (MessageDlg(rsNoCompareFiles, mtConfirmation, [mbyes, mbno], 0)<>mryes) then
+      if (not warnedAboutDisablingInstantRescan) and (MessageDlg(rsNoCompareFiles, mtWarning, [mbyes, mbno], 0)<>mryes) then
         exit;
 
       warnedAboutDisablingInstantRescan:=true;
@@ -724,9 +736,9 @@ begin
   end
   else
   begin
-    if (cbMustStartWithBase.Checked=false) then
+    if (rbGeneratePointermap.checked=false) and (cbMustStartWithBase.Checked=false) then
     begin
-      if  (not warnedAboutDisablingInstantRescan) and (MessageDlg(rsNoCompareFiles, mtConfirmation, [mbyes, mbno], 0)<>mryes) then
+      if  (not warnedAboutDisablingInstantRescan) and (MessageDlg(rsNoCompareFiles, mtWarning, [mbyes, mbno], 0)<>mryes) then
         exit;
 
       warnedAboutDisablingInstantRescan:=true;
@@ -974,6 +986,13 @@ begin
 
 end;
 
+procedure TfrmPointerScannerSettings.cbNegativeOffsetsChange(Sender: TObject);
+begin
+  cbCompressedPointerscanFile.enabled:=not cbNegativeOffsets.checked;
+  if cbNegativeOffsets.checked then
+    cbCompressedPointerscanFile.checked:=false;
+end;
+
 procedure TfrmPointerScannerSettings.cbShowAdvancedOptionsChange(Sender: TObject);
 begin
   panel3.visible:=cbShowAdvancedOptions.checked;
@@ -1017,7 +1036,7 @@ begin
 
         if fileexists(odLoadPointermap.FileName+'.addresslist') then
         begin
-          tstrings(cbAddress.tag).LoadFromFile(odLoadPointermap.FileName+'.addresslist');
+          tstrings(cbAddress.tag).LoadFromFile(odLoadPointermap.FileName+'.addresslist', true);
           UpdateAddressList(cbAddress);
         end;
 
@@ -1056,24 +1075,27 @@ begin
   if cbCompareToOtherPointermaps.checked then
   begin
     pdatafilelist:=TPointerFileList.create(il, self, cbShowAdvancedOptions.left-cbCompareToOtherPointermaps.left-8);
+    pdatafilelist.Color:=clWindow;
+    pdatafilelist.BevelOuter:=bvNone;
+    pdatafilelist.BorderStyle:=bsSingle;
     pdatafilelist.AnchorSideTop.Control:=cbCompareToOtherPointermaps;
     pdatafilelist.AnchorSideTop.Side:=asrBottom;
     pdatafilelist.AnchorSideLeft.Control:=cbCompareToOtherPointermaps;
     pdatafilelist.AnchorSideLeft.Side:=asrLeft;
 
-    pdatafilelist.AnchorSideRight.Control:=cbShowAdvancedOptions;
-    pdatafilelist.AnchorSideRight.Side:=asrLeft;
+    //pdatafilelist.AnchorSideRight.Control:=self;
+    //pdatafilelist.AnchorSideRight.Side:=asrRight;
 
     pdatafilelist.OnEmptyList:=PointerFileListEmpty;
     pdatafilelist.OnResize:=PointerFileListResize;
 
-    pdatafilelist.Anchors:=[akTop, akLeft, akRight];
+    pdatafilelist.Anchors:=[akTop, akLeft]; //, akRight];
 
     pdatafilelist.AutoSize:=true;
+    pdatafilelist.DoAutoSize;
+    pdatafilelist.AdjustPos(pdatafilelist);
 
-    panel3.AnchorSideTop.Control:=pdatafilelist;
-    panel3.AnchorSideTop.Side:=asrBottom;
-    panel3.BorderSpacing.Top:=50;;
+    cbShowAdvancedOptions.AnchorSideTop.Control:=pdatafilelist;
   end
   else
   begin
@@ -1084,9 +1106,7 @@ begin
     pdatafilelist.free;
     pdatafilelist:=nil;
 
-    panel3.AnchorSideTop.Control:=cbCompareToOtherPointermaps;
-    panel3.AnchorSideTop.Side:=asrBottom;
-        panel3.BorderSpacing.Top:=0;;
+    cbShowAdvancedOptions.AnchorSideTop.Control:=cbCompareToOtherPointermaps;
   end;
 
   //UpdateGuiBasedOnSavedPointerScanUsage;
@@ -1109,12 +1129,22 @@ begin
     begin
       reg.WriteBool('Advanced', cbShowAdvancedOptions.checked);
       reg.WriteBool('warnedAboutDisablingInstantRescan', warnedAboutDisablingInstantRescan);
+
+      if TryStrToInt(edtMaxOffsetsPerNode.text,i) then
+      begin
+        reg.WriteBool('MaxOffsetsPerNode Checked', cbMaxOffsetsPerNode.checked);
+        reg.WriteInteger('MaxOffsetsPerNode Value', i);
+      end;
+
     end;
 
     if Reg.OpenKey('\Software\Cheat Engine\PSNNodeList', false) then
     begin
       oldlist:=tstringlist.create;
-      reg.GetKeyNames(oldlist);
+      try
+        reg.GetKeyNames(oldlist);
+      except
+      end;
 
       for i:=0 to oldlist.count-1 do
         reg.DeleteKey(oldlist[i]);
@@ -1222,7 +1252,8 @@ begin
   edtReverseStart.clientwidth:=i;
   edtReverseStop.clientwidth:=i;
 
-  i:=max(canvas.TextWidth(editStructsize.text)+4, editStructsize.clientwidth);
+
+  i:=max(canvas.TextWidth('XXXX')+DPIHelper.GetEditBoxMargins(editStructsize), editStructsize.clientwidth);
   editStructsize.clientwidth:=i;
 
   i:=max(btnOk.width, btnCancel.width);
@@ -1238,13 +1269,15 @@ begin
   begin
     //get the addresslist from the scandata.addresslist file (if it exists)
     if fileexists(odLoadPointermap.filename+'.addresslist') then
-      tstrings(cbAddress.tag).LoadFromFile(odLoadPointermap.filename+'.addresslist');
+      tstrings(cbAddress.tag).LoadFromFile(odLoadPointermap.filename+'.addresslist', true);
   end
   else
     MainForm.addresslist.getAddressList(tstrings(cbAddress.tag));
 
   UpdateAddressList(cbAddress);
+  AdjustComboboxSize(cbValueType, self.canvas);
   cbAddress.ItemHeight:=cbValueType.ItemHeight;
+  cbAddress.height:=cbValueType.Height;
 
 
 end;
@@ -1293,12 +1326,22 @@ begin
 
     if reg.ValueExists('warnedAboutDisablingInstantRescan') then
       warnedAboutDisablingInstantRescan:=reg.ReadBool('warnedAboutDisablingInstantRescan');
+
+    if reg.ValueExists('MaxOffsetsPerNode Checked') then
+      cbMaxOffsetsPerNode.checked:=reg.ReadBool('MaxOffsetsPerNode Checked');
+
+    if reg.ValueExists('MaxOffsetsPerNode Value') then
+      edtMaxOffsetsPerNode.Text:=inttostr(reg.ReadInteger('MaxOffsetsPerNode Value'));
+
   end;
 
   if Reg.OpenKey('\Software\Cheat Engine\PSNNodeList', false) then
   begin
     list:=tstringlist.create;
-    Reg.GetKeyNames(list);
+    try
+      Reg.GetKeyNames(list);
+    except
+    end;
 
 
     for i:=0 to list.count-1 do

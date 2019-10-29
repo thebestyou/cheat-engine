@@ -20,6 +20,7 @@ type
 
   TFormMemoryRegions = class(TForm)
     Button1: TButton;
+    mrImageList: TImageList;
     ListView1: TListView;
     PopupMenu1: TPopupMenu;
     Saveselectedregions1: TMenuItem;
@@ -68,6 +69,7 @@ resourcestring
   rsNoAccess = 'No Access';
   rsGuard = 'Guard';
   rsNoCache = 'No Cache';
+  rsWriteCombine = 'Write Combine';
   rsCommit = 'Commit';
   rsFree = 'Free';
   rsReserve = 'Reserve';
@@ -127,6 +129,7 @@ begin
       if (PAGE_NOACCESS and mbi.AllocationProtect)=PAGE_NOACCESS then temp:=rsNoAccess;
       if (PAGE_GUARD and mbi.AllocationProtect)=PAGE_GUARD then temp:=temp+'+'+rsGuard;
       if (PAGE_NOCACHE	and mbi.AllocationProtect)=PAGE_NOCACHE then temp:=temp+'+'+rsNoCache;
+      if (PAGE_WRITECOMBINE and mbi.AllocationProtect)=PAGE_WRITECOMBINE then temp:=temp+'+'+rsWriteCombine;
       listview1.Items[listview1.Items.Count-1].SubItems.add(temp);
 
       case mbi.State of
