@@ -13,7 +13,7 @@ uses
   dialogs, JvDesignSurface, DOM, typinfo, LResources, JvDesignImp, JvDesignUtils,
   graphics, math, xmlread,xmlwrite, WSStdCtrls, custombase85, PropEdits,
   ComponentEditors, CEListviewItemEditor, TreeViewPropEdit, menus, MenuIntf, LCLProc,
-  Calendar;
+  Calendar, CECustomButton, betterControls;
 
 type TCEPageControl=class(TPageControl);
 type
@@ -603,7 +603,7 @@ type TCEEdit=class(TEdit)
     property TextHintFontStyle: TFontStyle read fTextHintFontStyle write fTextHintFontStyle;
   end;
 
-type TCEForm=class(TCustomForm)
+type TCEForm=class(TForm) //TCustomForm)
   private
     saving: boolean;
     fVisible: boolean;
@@ -622,8 +622,10 @@ type TCEForm=class(TCustomForm)
     designsurface: TJvDesignSurface;
     procedure ResyncWithLua(Base: TComponent); overload;
     procedure ResyncWithLua; overload;
+    procedure SaveToStream(s: tstream);
     procedure SaveToFile(filename: string);
     procedure SaveToFileLFM(filename: string);
+    procedure LoadFromStream(s: TStream);
     procedure LoadFromFile(filename: string);
     procedure LoadFromFileLFM(filename: string);
     procedure SaveToXML(Node: TDOMNode; dontdeactivate:boolean=false);
@@ -980,7 +982,7 @@ end;  }
 
 implementation
 
-uses luahandler,luacaller, formdesignerunit, CheckLst;
+uses luahandler,luacaller, formdesignerunit, CheckLst, colorbox;
 
 resourcestring
   rsInvalidFormData = 'Invalid formdata';
@@ -1111,7 +1113,7 @@ begin
     CreateGUID(g);
 
     s:=GUIDToString(g);
-    for i:=1 to length(s)-1 do
+    for i:=1 to length(s) do
       if s[i] in ['{','}','-'] then
         s[i]:='_';
 
@@ -1234,7 +1236,11 @@ begin
     if active then active:=false;
   end;
 
-  if saveddesign=nil then exit; //nothing to save
+  if saveddesign=nil then
+    SaveCurrentStateasDesign;
+
+  if saveddesign=nil then
+    exit; //give up
 
   //for now use a binarystream instead of xml. the xmlwriter/reader does not support stringlists
   //create a stream for storage
@@ -1363,7 +1369,8 @@ begin
   active:=wasActive;
 end;
 
-procedure TCEForm.SaveToFile(filename: string);
+
+procedure TCEForm.SaveToStream(s: tstream);
 var
   xmldoc: TXMLDocument;
   formnode: TDOMNode;
@@ -1375,7 +1382,20 @@ begin
   SaveCurrentStateasDesign;
   SaveToXML(formnode,true);
 
-  WriteXML(xmldoc, filename);
+  WriteXML(xmldoc, s);
+end;
+
+
+procedure TCEForm.SaveToFile(filename: string);
+var
+  fs: TFilestream;
+begin
+  fs:=TFileStream.Create(filename, fmCreate);
+  try
+    SaveToStream(fs);
+  finally
+    fs.free;
+  end;
 end;
 
 procedure TCEForm.SaveToFileLFM(filename: string);
@@ -1389,13 +1409,13 @@ begin
   ms.Destroy;
 end;
 
-procedure TCEForm.LoadFromFile(filename: string);
+procedure TCEForm.LoadFromStream(s: TStream);
 var
   formnode: TDOMNode;
   xmldoc: TXMLDocument;
 begin
   xmldoc:=nil;
-  ReadXMLFile(xmldoc, filename);
+  ReadXMLFile(xmldoc, s);
 
   if xmldoc<>nil then
   begin
@@ -1408,6 +1428,25 @@ begin
     end
     else
       raise exception.create(rsInvalidFormData);
+  end;
+
+  if ShouldAppsUseDarkMode() then
+    if color=clDefault then
+    begin
+      color:=clWindow;
+      font.color:=clWindowtext;
+    end;
+end;
+
+procedure TCEForm.LoadFromFile(filename: string);
+var
+  fs: TFileStream;
+begin
+  fs:=TFileStream.Create(filename, fmOpenRead);
+  try
+    LoadFromStream(fs);
+  finally
+    fs.free;
   end;
 end;
 
@@ -1426,6 +1465,13 @@ begin
   ms.Destroy;
 
   active:=wasActive;
+
+  if ShouldAppsUseDarkMode() then
+    if color=clDefault then
+    begin
+      color:=clWindow;
+      font.color:=clWindowtext;
+    end;
 end;
 
 procedure TCEForm.paint;
@@ -1437,7 +1483,7 @@ begin
     if color<>clDefault then
       DesignPaintGrid(Canvas, ClientRect, ColorToRGB(color), InvertColor(ColorToRGB(color)), scalex(8,96))
     else
-      DesignPaintGrid(Canvas, ClientRect, clBtnFace,clBlack, scalex(8,96));
+      DesignPaintGrid(Canvas, ClientRect, clBtnFace,clWindowtext, scalex(8,96));
   end;
 end;
 
@@ -1564,6 +1610,8 @@ initialization
   RegisterClass(TComboBox);
   RegisterClass(TListBox);
 
+
+
   RegisterClass(TCheckBox);
   RegisterClass(TGroupBox);
   RegisterClass(TRadioGroup);
@@ -1580,6 +1628,22 @@ initialization
   RegisterClass(TTrayIcon);
   registerclass(TStatusBar);
   registerclass(TCheckListBox);
+  registerclass(TColorDialog);
+  registerclass(TColorBox);
+
+  registerclass(TFontDialog);
+  registerclass(TBitBtn);
+  registerclass(TSpeedButton);
+  registerclass(TStaticText);
+  registerclass(TShape);
+  registerclass(TBevel);
+  registerclass(TNotebook); //eww...
+  registerclass(TLabeledEdit);
+  registerclass(TControlBar);
+  registerclass(TFlowPanel);
+  registerclass(TApplicationProperties); //might be usefull...
+  registerclass(TColorListBox);
+
 
 
   RegisterPropertyEditor(ClassTypeInfo(TListItems), TCEListView, 'Items', TCEListViewItemsPropertyEditor);

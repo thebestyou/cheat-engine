@@ -9,7 +9,7 @@ This unit will hold some global variables (previously cefuncproc.pas)
 interface
 
 uses
-  Classes, SysUtils, commonTypeDefs, syncobjs, Graphics;
+  Classes, SysUtils, commonTypeDefs, syncobjs, Graphics, betterControls;
 
 //type TUnexpectedExceptionAction=(ueaIgnore, ueaBreak, ueaBreakIfInRegion);
 
@@ -29,6 +29,7 @@ var
   Scan_MEM_MAPPED: boolean=false;
 
   repeatDelay: integer=0;
+  delayAfterDebuggerAttach: dword=0;
 
   scan_dirtyonly: boolean=true;
   scan_pagedonly: boolean=true;
@@ -160,6 +161,22 @@ var
 
   allocsAddToUnexpectedExceptionList: boolean;
 
+  {$ifdef darwin}
+  speedhack_HookMachAbsoluteTime:boolean;
+  {$endif}
+
+  {$ifdef USELAZFREETYPE}
+  UseOriginalRenderingSystem: boolean;
+  {$endif}
+
+  dbvmbp_options: record
+    TriggerCOW:boolean;
+    TargetedProcessOnly:boolean;
+    KernelmodeBreaks: boolean;
+  end;
+  DBVMWatchBPActive: boolean;
+
+  forceCR3VirtualQueryEx: boolean;
 
 
 

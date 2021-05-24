@@ -10,8 +10,9 @@ object frmCodeFilter: TfrmCodeFilter
   OnClose = FormClose
   OnCreate = FormCreate
   OnDestroy = FormDestroy
+  OnShow = FormShow
   Position = poScreenCenter
-  LCLVersion = '2.0.0.4'
+  LCLVersion = '2.0.6.0'
   object Label1: TLabel
     Left = 0
     Height = 45
@@ -64,7 +65,7 @@ object frmCodeFilter: TfrmCodeFilter
         item
           AutoSize = True
           Caption = 'Executed'
-          Width = 62
+          Width = 63
         end>
       HideSelection = False
       MultiSelect = True
@@ -110,36 +111,36 @@ object frmCodeFilter: TfrmCodeFilter
     Left = 8
     Height = 120
     Top = 53
-    Width = 411
+    Width = 385
     AutoSize = True
     BorderSpacing.Left = 8
     BorderSpacing.Top = 8
     BevelOuter = bvNone
     ClientHeight = 120
-    ClientWidth = 411
+    ClientWidth = 385
     TabOrder = 1
     object GroupBox1: TGroupBox
       AnchorSideLeft.Control = Panel3
       AnchorSideLeft.Side = asrBottom
       AnchorSideRight.Side = asrBottom
-      Left = 254
+      Left = 255
       Height = 120
       Top = 0
-      Width = 157
+      Width = 130
       AutoSize = True
       BorderSpacing.Left = 8
       Caption = 'Load address list'
       ChildSizing.Layout = cclLeftToRightThenTopToBottom
       ChildSizing.ControlsPerLine = 1
       ClientHeight = 100
-      ClientWidth = 153
+      ClientWidth = 126
       TabOrder = 0
       object btnLoadAddressesFromTrace: TButton
         Left = 0
         Height = 25
         Hint = 'Load a previous trace and filters out the CALL''s from there'
         Top = 0
-        Width = 153
+        Width = 126
         AutoSize = True
         Caption = 'From Trace'
         OnClick = btnLoadAddressesFromTraceClick
@@ -150,30 +151,29 @@ object frmCodeFilter: TfrmCodeFilter
         Height = 25
         Hint = 'Disassembles the code and marks calls.  This can be inaccurate and might end up writing 0xcc''s at random/wrong locations'
         Top = 25
-        Width = 153
+        Width = 126
         AutoSize = True
-        Caption = 'From disassembler'
+        Caption = 'From Disassembler'
         OnClick = btnLoadAddressesByDisassemblingClick
         ParentShowHint = False
         ShowHint = True
         TabOrder = 1
       end
-      object Button1: TButton
+      object btnFromUnwindInfo: TButton
         Left = 0
         Height = 25
         Top = 50
-        Width = 153
-        Caption = 'From address dissection'
-        OnClick = Button1Click
+        Width = 126
+        Caption = 'From Unwind Info'
+        OnClick = btnFromUnwindInfoClick
         TabOrder = 3
-        Visible = False
       end
       object btnLoadAddressesFromFile: TButton
         Left = 0
         Height = 25
         Hint = 'Loads a file containing a list of addresses (e.g from a previous filter session or from the branch mapper)'
         Top = 75
-        Width = 153
+        Width = 126
         AutoSize = True
         Caption = 'From File'
         OnClick = btnLoadAddressesFromFileClick
@@ -188,11 +188,11 @@ object frmCodeFilter: TfrmCodeFilter
       Left = 0
       Height = 100
       Top = 0
-      Width = 246
+      Width = 247
       AutoSize = True
       BevelOuter = bvNone
       ClientHeight = 100
-      ClientWidth = 246
+      ClientWidth = 247
       TabOrder = 1
       OnClick = Panel3Click
       object btnStart: TButton
@@ -251,14 +251,14 @@ object frmCodeFilter: TfrmCodeFilter
         Left = 0
         Height = 52
         Top = 15
-        Width = 146
+        Width = 147
         AutoSize = True
         BevelOuter = bvNone
         ChildSizing.VerticalSpacing = 2
         ChildSizing.Layout = cclLeftToRightThenTopToBottom
         ChildSizing.ControlsPerLine = 1
         ClientHeight = 52
-        ClientWidth = 146
+        ClientWidth = 147
         TabOrder = 3
         OnClick = Panel2Click
         object btnFilterOutNonExecutedAddresses: TButton
@@ -266,7 +266,7 @@ object frmCodeFilter: TfrmCodeFilter
           Height = 25
           Hint = 'Removes all addresses from the list that have not been executed, and resets the breakpoints on the remaining addresses if the filter is active'
           Top = 0
-          Width = 146
+          Width = 147
           Caption = 'Has been executed'
           Enabled = False
           OnClick = FilterClick
@@ -280,7 +280,7 @@ object frmCodeFilter: TfrmCodeFilter
           Height = 25
           Hint = 'Removes all addresses from the list that have been executed, and resets the breakpoints on the remaining addresses if the filter is active'
           Top = 27
-          Width = 146
+          Width = 147
           Caption = 'Has not been executed'
           Enabled = False
           OnClick = FilterClick
@@ -294,7 +294,7 @@ object frmCodeFilter: TfrmCodeFilter
         Left = 0
         Height = 15
         Top = 0
-        Width = 238
+        Width = 239
         Caption = 'Addresses executed since last filter operation:'
         ParentColor = False
       end
@@ -302,7 +302,7 @@ object frmCodeFilter: TfrmCodeFilter
         AnchorSideLeft.Control = Label3
         AnchorSideLeft.Side = asrBottom
         AnchorSideTop.Control = Label3
-        Left = 240
+        Left = 241
         Height = 15
         Top = 0
         Width = 6
@@ -358,13 +358,14 @@ object frmCodeFilter: TfrmCodeFilter
     AnchorSideLeft.Control = Panel5
     AnchorSideLeft.Side = asrBottom
     AnchorSideTop.Control = Panel5
-    Left = 427
+    Left = 401
     Height = 25
     Hint = 'Starts a single stepping (branch only) trace and records all unique IP''s encountered.  You can use the results from this with the "From File" address list'#13#10'Make sure that the code you''re interested in is executed at least once'#13#10#13#10'<WARNING: SLOW and recommended as last resort>'
     Top = 53
     Width = 149
     AutoSize = True
     BorderSpacing.Left = 8
+    BorderSpacing.Right = 16
     Caption = 'Launch branch mapper'
     OnClick = frmLaunchBranchMapperClick
     ParentShowHint = False
@@ -374,18 +375,18 @@ object frmCodeFilter: TfrmCodeFilter
   object Timer1: TTimer
     Interval = 100
     OnTimer = Timer1Timer
-    left = 208
-    top = 72
+    Left = 208
+    Top = 72
   end
   object OpenDialog: TOpenDialog
-    left = 456
-    top = 88
+    Left = 536
+    Top = 96
   end
   object pmResults: TPopupMenu
     Images = cfImageList
     OnPopup = pmResultsPopup
-    left = 112
-    top = 240
+    Left = 112
+    Top = 240
     object miSaveAddressList: TMenuItem
       Caption = 'Save addresslist'
       ImageIndex = 2
@@ -407,12 +408,12 @@ object frmCodeFilter: TfrmCodeFilter
     end
   end
   object SaveDialog: TSaveDialog
-    left = 200
-    top = 248
+    Left = 200
+    Top = 248
   end
   object cfImageList: TImageList
-    left = 405
-    top = 258
+    Left = 405
+    Top = 258
     Bitmap = {
       4C69030000001000000010000000FFFFFF00FFFFFF00FFFFFF00FFFFFF00FFFF
       FF00FFFFFF00FFFFFF00FFFFFF00FFFFFF00FFFFFF00FFFFFF00FFFFFF00FFFF

@@ -1,7 +1,7 @@
 object HotKeyForm: THotKeyForm
-  Left = 234
+  Left = 527
   Height = 381
-  Top = 180
+  Top = 193
   Width = 582
   AutoSize = True
   BorderIcons = []
@@ -12,7 +12,7 @@ object HotKeyForm: THotKeyForm
   OnCreate = FormCreate
   OnShow = FormShow
   Position = poScreenCenter
-  LCLVersion = '2.0.0.4'
+  LCLVersion = '2.0.6.0'
   object ListView1: TListView
     Left = 0
     Height = 173
@@ -157,7 +157,7 @@ object HotKeyForm: THotKeyForm
             Left = 4
             Height = 15
             Top = 2
-            Width = 228
+            Width = 227
             BorderSpacing.Left = 4
             BorderSpacing.Top = 2
             Caption = 'Type the keys you want to set the hotkey to'
@@ -291,6 +291,7 @@ object HotKeyForm: THotKeyForm
           BorderSpacing.Top = 2
           Enabled = False
           ItemHeight = 15
+          ItemIndex = 0
           Items.Strings = (
             'Activate'
           )
@@ -298,6 +299,7 @@ object HotKeyForm: THotKeyForm
           PopupMenu = pmAddSound
           Style = csDropDownList
           TabOrder = 3
+          Text = 'Activate'
         end
         object sbPlayActivate: TSpeedButton
           AnchorSideLeft.Control = cbActivateSound
@@ -375,6 +377,7 @@ object HotKeyForm: THotKeyForm
           BorderSpacing.Top = 2
           Enabled = False
           ItemHeight = 15
+          ItemIndex = 0
           Items.Strings = (
             'Deactivate'
           )
@@ -382,6 +385,7 @@ object HotKeyForm: THotKeyForm
           PopupMenu = pmAddSound
           Style = csDropDownList
           TabOrder = 4
+          Text = 'Deactivate'
         end
         object sbPlayDeactivate: TSpeedButton
           AnchorSideLeft.Control = cbActivateSound
@@ -512,44 +516,44 @@ object HotKeyForm: THotKeyForm
       ClientWidth = 580
       TabOrder = 1
       OnResize = Panel2Resize
-      object BitBtn1: TBitBtn
-        AnchorSideLeft.Control = Panel2
-        AnchorSideLeft.Side = asrCenter
-        Left = 255
-        Height = 25
-        Top = 4
-        Width = 70
-        AutoSize = True
-        BorderSpacing.Top = 3
-        BorderSpacing.Bottom = 3
-        Caption = 'OK'
-        Constraints.MinWidth = 70
-        OnClick = BitBtn1Click
-        TabOrder = 0
-      end
       object lblID: TLabel
         Left = 575
         Height = 1
-        Top = 23
+        Top = 27
         Width = 1
         Alignment = taRightJustify
         Anchors = [akTop, akRight]
         ParentColor = False
       end
+      object btnOK: TButton
+        AnchorSideLeft.Control = Panel2
+        AnchorSideLeft.Side = asrCenter
+        Left = 253
+        Height = 25
+        Top = 4
+        Width = 75
+        AutoSize = True
+        BorderSpacing.Top = 3
+        BorderSpacing.Bottom = 3
+        Caption = 'OK'
+        Constraints.MinWidth = 75
+        OnClick = btnOKClick
+        TabOrder = 0
+      end
     end
   end
   object pmHotkeylist: TPopupMenu
     OnPopup = pmHotkeylistPopup
-    left = 92
-    top = 57
+    Left = 92
+    Top = 57
     object miDelete: TMenuItem
       Caption = 'Delete'
       OnClick = miDeleteClick
     end
   end
   object pmAddSound: TPopupMenu
-    left = 400
-    top = 72
+    Left = 400
+    Top = 72
     object miAddSound: TMenuItem
       Caption = 'Add sounds'
       OnClick = miAddSoundClick
@@ -560,7 +564,7 @@ object HotKeyForm: THotKeyForm
     Filter = 'All files (*.*)|*.*|Wave files|*.WAV'
     FilterIndex = 2
     Options = [ofAllowMultiSelect, ofPathMustExist, ofEnableSizing, ofViewDetail]
-    left = 256
-    top = 64
+    Left = 256
+    Top = 64
   end
 end

@@ -26,8 +26,15 @@ when the view is scrolled/collapsed/expanded the owner should call UpdatePositio
 interface
 
 uses
-  windows, Classes, SysUtils, ComCtrls, Controls, StdCtrls,  MemoryRecordUnit,
-  Graphics, LCLType;
+  {$ifdef darwin}
+  macport, LCLIntf, LMEssages, messages,
+  {$endif}
+
+  {$ifdef windows}
+  windows,
+  {$endif}
+  Classes, SysUtils, ComCtrls, Controls, StdCtrls,  MemoryRecordUnit,
+  Graphics, LCLType, betterControls;
 
 type
   TAddressListEditor=class(TCustomEdit)
@@ -38,6 +45,7 @@ type
     edited: boolean;
 
     starttime: dword;
+    canselect: boolean;
   protected
     procedure DoClose;
     procedure DblClick; override;
@@ -45,6 +53,9 @@ type
     procedure KeyDown(var Key: Word; Shift: TShiftState); override;
     procedure TextChanged; override;
     procedure DoExit; override;
+
+    procedure SetSelStart(Val: integer); override;
+    procedure SetSelLength(Val: integer); override;
   public
     procedure UpdatePosition(left: integer);
     constructor create(owner: TTreeView; memrec: TMemoryrecord; left: integer); overload;
@@ -58,6 +69,18 @@ type
 implementation
 
 uses addresslist;
+
+procedure TAddressListEditor.SetSelStart(Val: integer);
+begin
+  if canselect then
+    inherited; //(val)
+end;
+
+procedure TAddressListEditor.SetSelLength(Val: integer);
+begin
+  if canselect then
+    inherited; //(val)
+end;
 
 procedure TAddressListEditor.DblClick;
 begin
@@ -105,6 +128,7 @@ begin
       //send an VK_UP to the owner
       SendMessage(TTreeView(Owner).Handle, WM_KEYDOWN, VK_UP, 0);
 
+
       TAddresslist(TTreeview(owner).Owner).doValueChange;
     end;
 
@@ -137,6 +161,7 @@ begin
   begin
     try
       memrec.Value:=text;
+      edited:=false;
     except
       beep;
     end;
@@ -194,7 +219,9 @@ begin
 
 
   self.parent:=owner;
+  {$ifdef windows}
   SendMessage(Handle, EM_SETMARGINS, EC_LEFTMARGIN, 0);
+  {$endif}
 
   self.SetFocus;
 
@@ -204,7 +231,11 @@ begin
   starttime:=GetTickCount;
 
   if ((GetKeyState(VK_RETURN) shr 15) and 1)=1 then  //if launched with RETURN then select all
-    self.SelectAll
+  begin
+    canselect:=true;
+    self.SelectAll;
+    canselect:=false;
+  end
   else
   begin
     pt:=self.ScreenToClient(mouse.cursorpos);

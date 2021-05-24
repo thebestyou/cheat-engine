@@ -4,7 +4,14 @@ interface
 
 {$mode DELPHI}
 
-uses jwawindows, windows, classes, dialogs, sysutils;
+uses
+  {$ifdef darwin}
+  macport,
+  {$endif}
+  {$ifdef windows}
+  jwawindows, windows,
+  {$endif}
+  classes, dialogs, sysutils;
 
 const
   VMCALL_GETVERSION=0;
@@ -76,18 +83,54 @@ const
   VMCALL_SETSPEEDHACK = 62;
 
 
+  VMCALL_DISABLETSCHOOK=66;
+  VMCALL_ENABLETSCHOOK=67;
+
+  VMCALL_WATCH_GETSTATUS=68;
+
+  VMCALL_CLOAK_TRACEONBP=69;
+  VMCALL_CLOAK_TRACEONBP_REMOVE=70;
+  VMCALL_CLOAK_TRACEONBP_READLOG=71;
+  VMCALL_CLOAK_TRACEONBP_GETSTATUS=72;
+  VMCALL_CLOAK_TRACEONBP_STOPTRACE=73;
+
+  VMCALL_GETBROKENTHREADLISTSIZE=74;
+  VMCALL_GETBROKENTHREADENTRYSHORT=75;
+  VMCALL_GETBROKENTHREADENTRYFULL=76;
+  VMCALL_SETBROKENTHREADENTRYFULL=77;
+  VMCALL_RESUMEBROKENTHREAD=78;
+
+
+  VMCALL_DEBUG_SETSPINLOCKTIMEOUT=254;
+
 
   //---
   //watch options:
-  EPTO_MULTIPLERIP =1 shl 0; //log the same RIP multiple times (if different registers)
-  EPTO_LOG_ALL     =1 shl 1; //log every access in the page
-  EPTO_SAVE_FXSAVE =1 shl 2; //logs contain the xsave state
-  EPTO_SAVE_STACK  =1 shl 3; //logs contain a 4kb stack snapshot
-  EPTO_PMI_WHENFULL=1 shl 4; //Trigger a performance monitor interrupt when full (only use when you have a kernelmode driver)
+  EPTO_MULTIPLERIP  =1 shl 0; //log the same RIP multiple times (if different registers)
+  EPTO_LOG_ALL      =1 shl 1; //log every access in the page
+  EPTO_SAVE_FXSAVE  =1 shl 2; //logs contain the xsave state
+  EPTO_SAVE_STACK   =1 shl 3; //logs contain a 4kb stack snapshot
+  EPTO_PMI_WHENFULL =1 shl 4; //Trigger a performance monitor interrupt when full (only use when you have a kernelmode driver)
   EPTO_GROW_WHENFULL=1 shl 5; //Grow if the given size is too small (beware, if DBVM runs out of memory, your system will crash)
-  EPTO_INTERRUPT   =1 shl 6; //Trigger a debug interrupt when hit, no logging
+  EPTO_INTERRUPT    =1 shl 6; //Trigger a debug interrupt when hit, no logging
+  EPTO_DBVMBP       =1 shl 7; //On trigger save the state and change RIP to an infinite int3 loop (if interuptable)
+
+
+  //new debuger flags
+  DBG_CONTINUE_SINGLESTEP = $00010003; //continueDebugEvent continuestatus only for DBVM BP's
+  EXCEPTION_DBVM_BREAKPOINT = $CEDB0001;
 
 type
+  _CLIENT_ID = record
+    UniqueProcess: HANDLE;
+    UniqueThread: HANDLE;
+  end;
+  CLIENT_ID = _CLIENT_ID;
+  PCLIENT_ID = ^CLIENT_ID;
+  TClientID = CLIENT_ID;
+  PClientID = ^TClientID;
+
+
   TOriginalState=packed record
     oldflags: dword;
     oldcs, oldss, oldds, oldes, oldfs, oldgs: word;
@@ -109,12 +152,26 @@ type
   end;
   PULTIMAPDEBUGINFO=^TULTIMAPDEBUGINFO;
 
+  TDBVMBPShortState=record
+    watchid: integer;
+    status: integer;
+    cs: DWORD;
+    rip: QWORD;
+    cr3: QWORD;
+    fsbase: QWORD;
+    gsbase: qword;
+    gsbase_kernel: qword;
+    heartbeat: qword;
+  end;
+
+
   TPageEventBasic=record
     VirtualAddress: QWORD;
     PhysicalAddress: QWORD;
     CR3: QWORD;
     FSBASE: QWORD;
     GSBASE: QWORD;
+    GSBASE_KERNEL: QWORD;
     FLAGS: QWORD;
     RAX: QWORD;
     RBX: QWORD;
@@ -133,6 +190,12 @@ type
     RBP: QWORD;
     RSP: QWORD;
     RIP: QWORD;
+    DR0: QWORD;
+    DR1: QWORD;
+    DR2: QWORD;
+    DR3: QWORD;
+    DR6: QWORD;
+    DR7: QWORD;
     CS: WORD;
     DS: WORD;
     ES: WORD;
@@ -261,8 +324,24 @@ type
 //      2: (basics:    TPageEventBasicStackArray);
 //      3: (extendeds: TPageEventExtendedStackArray);
   end;
-
   PPageEventListDescriptor=^TPageEventListDescriptor;
+
+
+  TTracerListDescriptor=packed record
+    datatype: DWORD ;
+    count: DWORD;
+    //followed by results
+    //case integer of
+//      0: (basic:     array [0..0] of TPageEventBasic);
+//      1: (extended:  TPageEventBasic);//TPageEventExtendedArray);
+//      2: (basics:    TPageEventBasicStackArray);
+//      3: (extendeds: TPageEventExtendedStackArray);
+  end;
+
+  PTracerListDescriptor=^TTracerListDescriptor;
+
+
+
 
   TChangeRegOnBPInfo=packed record
     Flags: bitpacked record
@@ -297,6 +376,8 @@ type
       newOF: 0..1;            //28
       reserved: 0..7;         //29,30,31
     end;
+    changeXMM: QWORD; //16 nibbles, each bit is one dword
+    changeFP: QWORD; //just one bit, each bit is a fpu field
 
     newRAX: QWORD;
     newRBX: QWORD;
@@ -316,6 +397,55 @@ type
     newR14: QWORD;
     newR15: QWORD;
 
+    newFP0: QWORD;
+    newFP0_H: QWORD;
+    newFP1: QWORD;
+    newFP1_H: QWORD;
+    newFP2: QWORD;
+    newFP2_H: QWORD;
+    newFP3: QWORD;
+    newFP3_H: QWORD;
+    newFP4: QWORD;
+    newFP4_H: QWORD;
+    newFP5: QWORD;
+    newFP5_H: QWORD;
+    newFP6: QWORD;
+    newFP6_H: QWORD;
+    newFP7: QWORD;
+    newFP7_H: QWORD;
+    XMM0: QWORD;
+    XMM0_H: QWORD;
+    XMM1: QWORD;
+    XMM1_H: QWORD;
+    XMM2: QWORD;
+    XMM2_H: QWORD;
+    XMM3: QWORD;
+    XMM3_H: QWORD;
+    XMM4: QWORD;
+    XMM4_H: QWORD;
+    XMM5: QWORD;
+    XMM5_H: QWORD;
+    XMM6: QWORD;
+    XMM6_H: QWORD;
+    XMM7: QWORD;
+    XMM7_H: QWORD;
+    XMM8: QWORD;
+    XMM8_H: QWORD;
+    XMM9: QWORD;
+    XMM9_H: QWORD;
+    XMM10: QWORD;
+    XMM10_H: QWORD;
+    XMM11: QWORD;
+    XMM11_H: QWORD;
+    XMM12: QWORD;
+    XMM12_H: QWORD;
+    XMM13: QWORD;
+    XMM13_H: QWORD;
+    XMM14: QWORD;
+    XMM14_H: QWORD;
+    XMM15: QWORD;
+    XMM15_H: QWORD;
+
   end;
 
   TDBVMStatistics=packed record
@@ -331,9 +461,19 @@ type
   end;
   PDBVMBreakpoint=^TDBVMBreakpoint;
 
+  TEPTWatchLogData=record
+    physicalAddress: QWORD;
+    initialID: QWORD;
+    actualID: QWORD;
+    rip: QWORD;
+    data: QWORD;
+    cacheIssue: QWORD;
+    skipped: QWORD;
+  end;
+
 
 function dbvm_version: dword; stdcall;
-function dbvm_changepassword(password1,password2: dword):dword; stdcall;
+function dbvm_changepassword(password1:Qword; password2: dword; password3: Qword): DWORD; stdcall;
 function dbvm_changeselectors(cs,ss,ds,es,fs,gs: dword): DWORD; stdcall;
 function dbvm_restore_interrupts: DWORD; stdcall;
 function dbvm_block_interrupts: DWORD; stdcall;
@@ -376,13 +516,21 @@ function dbvm_getProcAddress(functionname: string): pointer;
 
 procedure dbvm_testPSOD;
 
-function dbvm_watch_writes(PhysicalAddress: QWORD; size: integer; Options: DWORD; MaxEntryCount: Integer): integer;
-function dbvm_watch_reads(PhysicalAddress: QWORD; size: integer; Options: DWORD; MaxEntryCount: Integer): integer;
-function dbvm_watch_executes(PhysicalAddress: QWORD; size: integer; Options: DWORD; MaxEntryCount: Integer): integer;
+function dbvm_watch_writes(PhysicalAddress: QWORD; size: integer; Options: DWORD; MaxEntryCount: Integer; UserModeLoop: qword=0; KernelModeLoop: qword=0): integer;
+function dbvm_watch_reads(PhysicalAddress: QWORD; size: integer; Options: DWORD; MaxEntryCount: Integer; UserModeLoop: qword=0; KernelModeLoop: qword=0): integer;
+function dbvm_watch_executes(PhysicalAddress: QWORD; size: integer; Options: DWORD; MaxEntryCount: Integer; UserModeLoop: qword=0; KernelModeLoop: qword=0): integer;
 function dbvm_watch_retrievelog(ID: integer; results: PPageEventListDescriptor; var resultsize: integer): integer;
 function dbvm_watch_delete(ID: integer): boolean;
+function dbvm_watch_getstatus(out last: TEPTWatchLogData; out best: TEPTWatchLogData): boolean;
 
-function dbvm_cloak_activate(PhysicalBase: QWORD; virtualAddress: Qword=0): integer;
+function dbvm_bp_getBrokenThreadListSize:integer;
+function dbvm_bp_getBrokenThreadEventShort(id: integer; var shortstate: TDBVMBPShortState):integer;
+function dbvm_bp_getBrokenThreadEventFull(id: integer; out watchid: integer; out status: integer; out state: TPageEventExtended):integer;
+function dbvm_bp_setBrokenThreadEventFull(id: integer; state: TPageEventExtended):integer;
+
+function dbvm_bp_resumeBrokenThread(id: integer; continueMethod: integer): integer;
+
+function dbvm_cloak_activate(PhysicalBase: QWORD; virtualAddress: Qword=0; mode: integer=1): integer;
 function dbvm_cloak_deactivate(PhysicalBase: QWORD): boolean;
 function dbvm_cloak_readoriginal(PhysicalBase: QWORD; destination: pointer): integer;
 function dbvm_cloak_writeoriginal(PhysicalBase: QWORD; source: pointer): integer;
@@ -390,22 +538,33 @@ function dbvm_cloak_writeoriginal(PhysicalBase: QWORD; source: pointer): integer
 function dbvm_cloak_changeregonbp(PhysicalAddress: QWORD; var changeregonbpinfo: TChangeRegOnBPInfo; VirtualAddress: qword=0): integer;
 function dbvm_cloak_removechangeregonbp(PhysicalAddress: QWORD): integer;
 
+function dbvm_cloak_traceonbp(PhysicalAddress: QWORD; count: integer; options: dword; VirtualAddress: qword=0): integer;
+function dbvm_cloak_traceonbp_getstatus(out count: dword; out  max: dword): integer;
+function dbvm_cloak_traceonbp_stoptrace: integer;
+function dbvm_cloak_traceonbp_remove(PhysicalAddress: QWORD=0; force: boolean=false): integer;
+function dbvm_cloak_traceonbp_readlog(results: PTracerListDescriptor; var resultsize: integer): integer; //VMCALL_CLOAK_TRACEONBP_READLOG
+
+
 procedure dbvm_ept_reset;
 
 function dbvm_get_statistics(out statistics: TDBVMStatistics):qword;
 
 procedure dbvm_setTSCAdjust(enabled: boolean; timeout: integer);
 procedure dbvm_speedhack_setSpeed(speed: double);
+procedure dbvm_enableTSCHook;
+function dbvm_disableTSCHook: boolean;
 
 
 function dbvm_log_cr3values_start: boolean;
 function dbvm_log_cr3values_stop(log: pointer): boolean;
 
+function dbvm_findCR3(hProcess: THandle): QWORD;
+
 function dbvm_registerPlugin(pluginaddress: pointer; pluginsize: integer; plugintype: integer): integer;
 procedure dbvm_raisePMI;
 procedure dbvm_ultimap2_hideRangeUsage;
 
-procedure configure_vmx(userpassword1,userpassword2: dword);
+procedure configure_vmx(userpassword1: qword; userpassword2: dword; userpassword3: qword);
 procedure configure_vmx_kernel;
 
 function ReadProcessMemoryWithCloakSupport(hProcess: THandle; lpBaseAddress, lpBuffer: Pointer; nSize: DWORD; var lpNumberOfBytesRead: PTRUINT): BOOL; stdcall;
@@ -415,9 +574,19 @@ function hasCloakedRegionInRange(virtualAddress: qword; size: integer; out VA:qw
 procedure dbvm_getBreakpointList(l: TStrings);
 function dbvm_isBreakpoint(virtualAddress: ptruint; out physicalAddress: qword; out breakoption: integer; var originalbyte: byte): boolean;
 
+
+procedure dbvm_debug_setSpinlockTimeout(timeout: qword);
+
+function getClientIDFromDBVMBPState(const state: TPageEventExtended; out clientid: TClientID): boolean;
+function getClientIDFromDBVMBPShortState(state: TDBVMBPShortState; out clientid: TClientID): boolean;
+
+
+
+
 var
-  vmx_password1: dword;
+  vmx_password1: qword;
   vmx_password2: dword;
+  vmx_password3: qword;
 
   vmx_enabled: boolean;
 
@@ -429,15 +598,16 @@ implementation
 
 uses DBK32functions, cefuncproc, PEInfoFunctions, NewKernelHandler, syncobjs,
   ProcessHandlerUnit, Globals, AvgLvlTree, maps, debuggertypedefinitions,
-  DebugHelper, frmBreakpointlistunit;
+  DebugHelper, frmBreakpointlistunit, math{$ifdef darwin},mactypes{$endif},
+  multicpuexecution, CEDebugger;
 
 resourcestring
 rsInvalidInstruction = 'Invalid instruction';
 rsBigError = 'Error';
 rsSmallError = 'error';
 
-var vmcall :function(vmcallinfo:pointer; level1pass: dword): PtrUInt; stdcall;
-var vmcall2 :function(vmcallinfo:pointer; level1pass: dword; secondaryOut: pptruint): PtrUInt; stdcall;
+var vmcall :function(vmcallinfo:pointer): PtrUInt; stdcall;
+var vmcall2 :function(vmcallinfo:pointer; secondaryOut: pptruint): PtrUInt; stdcall;
 
 
   cloakedregionsCS: TCriticalSection=nil;
@@ -568,6 +738,7 @@ var
   VA,PA: qword;
   x: ptruint;
   i: integer;
+  cr3: qword;
 begin
   if hasCloakedRegionInRange(qword(lpBaseAddress),nsize, VA, PA) then
   begin
@@ -611,6 +782,7 @@ begin
   end
   else
     result:=ReadProcessMemory(processhandle, lpBaseAddress, lpBuffer, nSize, lpNumberOfBytesRead);
+
 end;
 
 function WriteProcessMemoryWithCloakSupport(hProcess: THandle; lpBaseAddress, lpBuffer: Pointer; nSize: DWORD; var lpNumberOfBytesWritten: PTRUINT): BOOL; stdcall;
@@ -670,13 +842,13 @@ begin
 end;
 
 
-function vmcall2UnSupported(vmcallinfo:pointer; level1pass: dword; secondaryOut: pptruint): PtrUInt; stdcall;
+function vmcall2UnSupported(vmcallinfo:pointer; secondaryOut: pptruint): PtrUInt; stdcall;
 begin
   result:=0;
 end;
 
 
-function vmcallUnSupported(vmcallinfo:pointer; level1pass: dword): PtrUInt; stdcall;
+function vmcallUnSupported(vmcallinfo:pointer): PtrUInt; stdcall;
 begin
   result:=0;
 end;
@@ -688,6 +860,7 @@ begin
   raise exception.create(rsInvalidInstruction);
 end;
 
+{$IFDEF windows}
 function vmcallexceptiontest(ExceptionInfo: PEXCEPTION_POINTERS): LONG; stdcall;
 begin
   result:=EXCEPTION_CONTINUE_SEARCH;
@@ -703,19 +876,23 @@ begin
   end;
 
 end;
+{$ENDIF}
 
-function vmcallSupported_amd(vmcallinfo:pointer; level1pass: dword): PtrUInt; stdcall;
+function vmcallSupported_amd(vmcallinfo:pointer): PtrUInt; stdcall;
 var
 {$ifdef cpu64}
   originalrdx: ptruint;
+  originalrcx: ptruint;
 {$endif}
   r: ptruint;
 begin
   asm
 {$ifdef cpu64}
     mov originalrdx,rdx
+    mov originalrcx,rcx
     mov rax,vmcallinfo
-    mov edx,level1pass
+    mov rdx,[RIP+vmx_password1]
+    mov rcx,[RIP+vmx_password3]
     vmmcall
 
     mov rdx,originalrdx
@@ -731,23 +908,27 @@ begin
   result:=r;
 end;
 
-function vmcallSupported2_amd(vmcallinfo:pointer; level1pass: dword; output2: pptruint): PtrUInt; stdcall;
+function vmcallSupported2_amd(vmcallinfo:pointer; output2: pptruint): PtrUInt; stdcall;
 var
 {$ifdef cpu64}
   originalrdx: ptruint;
+  originalrcx: ptruint;
 {$endif}
   r,r2: ptruint;
 begin
   asm
 {$ifdef cpu64}
     mov originalrdx,rdx
+    mov originalrcx,rcx
     mov rax,vmcallinfo
-    mov edx,level1pass
+    mov rdx,[RIP+vmx_password1]
+    mov rcx,[RIP+vmx_password3]
     vmmcall
 
     mov r2,rdx
 
     mov rdx,originalrdx
+    mov rcx,originalrcx
     mov r,rax
 {$else}
     mov eax,vmcallinfo
@@ -764,10 +945,11 @@ begin
 end;
 
 
-function vmcallSupported2_intel(vmcallinfo:pointer; level1pass: dword; output2: pptruint): PtrUInt; stdcall;
+function vmcallSupported2_intel(vmcallinfo:pointer; output2: pptruint): PtrUInt; stdcall;
 var
 {$ifdef cpu64}
   originalrdx: ptruint;
+  originalrcx: ptruint;
 {$endif}
   r: ptruint;
   r2: ptruint;
@@ -775,13 +957,16 @@ begin
   asm
 {$ifdef cpu64}
     mov originalrdx,rdx
+    mov originalrcx,rcx
     mov rax,vmcallinfo
-    mov edx,level1pass
+    mov rdx,[RIP+vmx_password1]
+    mov rcx,[RIP+vmx_password3]
     vmcall
 
     mov r2,rdx
 
     mov rdx,originalrdx
+    mov rcx,originalrcx
     mov r,rax
 {$else}
     mov eax,vmcallinfo
@@ -797,25 +982,32 @@ begin
     output2^:=r2;
 end;
 
-function vmcallSupported_intel(vmcallinfo:pointer; level1pass: dword): PtrUInt; stdcall;
+function vmcallSupported_intel(vmcallinfo:pointer): PtrUInt; stdcall;
 var
 {$ifdef cpu64}
   originalrdx: ptruint;
+  originalrcx: ptruint;
 {$endif}
   r: ptruint;
 begin
   asm
 {$ifdef cpu64}
     mov originalrdx,rdx
+    mov originalrcx,rcx
     mov rax,vmcallinfo
-    mov edx,level1pass
+    mov rdx,[RIP+vmx_password1]
+    mov rcx,[RIP+vmx_password3]
+
+
     vmcall
 
     mov rdx,originalrdx
+    mov rcx,originalrcx
     mov r,rax
 {$else}
     mov eax,vmcallinfo
     mov edx,level1pass
+    mov ecx,level3pass
     vmcall     //should raise an UD if the cpu does not support it  (or the password is wrong)
     mov r,eax
 {$endif}
@@ -834,11 +1026,12 @@ var vmcallinfo: record
 end;
 begin
 
-  if (vmx_password1=0) and (vmx_password2=0) then
+  if (vmx_password1=0) and (vmx_password2=0) and (vmx_password3=0) then
   begin
     //set the password if it was not set
-    vmx_password1:=$76543210;
+    vmx_password1:=$0000000076543210;
     vmx_password2:=$fedcba98;
+    vmx_password3:=$0000000090909090;
   end;
 
 
@@ -846,7 +1039,7 @@ begin
   vmcallinfo.level2pass:=vmx_password2;
   vmcallinfo.command:=VMCALL_GETVERSION;
   try
-    result:=vmcall(@vmcallinfo,vmx_password1);
+    result:=vmcall(@vmcallinfo);
 
     if (result shr 24)<>$ce then
     begin
@@ -861,13 +1054,14 @@ begin
   end;
 end;
 
-function dbvm_changepassword(password1,password2: dword): DWORD; stdcall;
-var vmcallinfo: record
+function dbvm_changepassword(password1:Qword; password2: dword; password3: Qword): DWORD; stdcall;
+var vmcallinfo: packed record
   structsize: dword;
   level2pass: dword;
   command: dword;
-  password1: dword;
+  password1: qword;
   password2: dword;
+  password3: qword;
 end;
 begin
   vmcallinfo.structsize:=sizeof(vmcallinfo);
@@ -875,10 +1069,15 @@ begin
   vmcallinfo.command:=VMCALL_CHANGEPASSWORD;
   vmcallinfo.password1:=password1;
   vmcallinfo.password2:=password2;
+  vmcallinfo.password3:=password3;
   try
-    result:=vmcall(@vmcallinfo,vmx_password1);
-    vmx_password1:=password1;
-    vmx_password2:=password2;
+    result:=vmcall(@vmcallinfo);
+    if result=0 then
+    begin
+      vmx_password1:=password1;
+      vmx_password2:=password2;
+      vmx_password3:=password3;
+    end;
   except
     result:=$ffffffff;
   end;
@@ -902,7 +1101,7 @@ begin
   vmcallinfo.fs:=fs;
   vmcallinfo.gs:=gs;
 
-  result:=vmcall(@vmcallinfo,vmx_password1);
+  result:=vmcall(@vmcallinfo);
 end;
 
 function dbvm_redirect_interrupt1(redirecttype: integer; newintvector: dword; int1cs: dword; int1eip: dword): dword; stdcall;
@@ -925,7 +1124,7 @@ begin
   vmcallinfo.cs:=int1cs;
   
   try
-    result:=vmcall(@vmcallinfo,vmx_password1);
+    result:=vmcall(@vmcallinfo);
   except
     result:=$ffffffff;
   end;
@@ -942,7 +1141,7 @@ begin
   vmcallinfo.level2pass:=vmx_password2;
   vmcallinfo.command:=VMCALL_BLOCK_INTERRUPTS;
 
-  result:=vmcall(@vmcallinfo,vmx_password1);
+  result:=vmcall(@vmcallinfo);
 end;
 
 function dbvm_restore_interrupts: DWORD; stdcall;
@@ -955,7 +1154,7 @@ begin
   vmcallinfo.structsize:=sizeof(vmcallinfo);
   vmcallinfo.level2pass:=vmx_password2;
   vmcallinfo.command:=VMCALL_RESTORE_INTERRUPTS;
-  result:=vmcall(@vmcallinfo,vmx_password1);
+  result:=vmcall(@vmcallinfo);
 end;
 
 
@@ -979,7 +1178,7 @@ begin
   vmcallinfo.nopagefault:=0; //I like pagefaults
   
   try
-    result:=size-vmcall(@vmcallinfo,vmx_password1);
+    result:=size-vmcall(@vmcallinfo);
   except
     result:=0;
   end;
@@ -1006,7 +1205,7 @@ begin
   vmcallinfo.nopagefault:=0; //I like pagefaults
   
   try
-    result:=size-vmcall(@vmcallinfo,vmx_password1);  //it returns the number of bytes left
+    result:=size-vmcall(@vmcallinfo);  //it returns the number of bytes left
   except
     result:=0; //read 0 bytes
    // messagebox(0,pchar(rsBigError),pchar(rsSmallError),mb_ok);
@@ -1027,7 +1226,7 @@ begin
   vmcallinfo.structsize:=sizeof(vmcallinfo);
   vmcallinfo.level2pass:=vmx_password2;
   vmcallinfo.command:=VMCALL_RAISEPRIVILEGE;
-  result:=vmcall(@vmcallinfo,vmx_password1);
+  result:=vmcall(@vmcallinfo);
 end;
 
 function dbvm_ultimap_debuginfo(debuginfo: PULTIMAPDEBUGINFO): DWORD;
@@ -1041,7 +1240,7 @@ begin
   vmcallinfo.structsize:=sizeof(vmcallinfo);
   vmcallinfo.level2pass:=vmx_password2;
   vmcallinfo.command:=VMCALL_ULTIMAP_DEBUGINFO;
-  result:=vmcall(@vmcallinfo,vmx_password1);
+  result:=vmcall(@vmcallinfo);
 
   debuginfo^:=vmcallinfo.debuginfo;
 end;
@@ -1056,7 +1255,7 @@ begin
   vmcallinfo.structsize:=sizeof(vmcallinfo);
   vmcallinfo.level2pass:=vmx_password2;
   vmcallinfo.command:=VMCALL_ULTIMAP_RESUME;
-  result:=vmcall(@vmcallinfo,vmx_password1);
+  result:=vmcall(@vmcallinfo);
 end;
 
 function dbvm_ultimap_pause: DWORD;
@@ -1069,7 +1268,7 @@ begin
   vmcallinfo.structsize:=sizeof(vmcallinfo);
   vmcallinfo.level2pass:=vmx_password2;
   vmcallinfo.command:=VMCALL_ULTIMAP_PAUSE;
-  result:=vmcall(@vmcallinfo,vmx_password1);
+  result:=vmcall(@vmcallinfo);
 end;
 
 procedure dbvm_testPSOD;
@@ -1082,7 +1281,7 @@ begin
   vmcallinfo.structsize:=sizeof(vmcallinfo);
   vmcallinfo.level2pass:=vmx_password2;
   vmcallinfo.command:=VMCALL_TESTPSOD;
-  vmcall(@vmcallinfo,vmx_password1);
+  vmcall(@vmcallinfo);
 end;
 
 function dbvm_readMSR(msr: dword): QWORD;
@@ -1098,7 +1297,7 @@ begin
   vmcallinfo.level2pass:=vmx_password2;
   vmcallinfo.command:=VMCALL_READMSR;
   vmcallinfo.msr:=msr;
-  result:=vmcall(@vmcallinfo,vmx_password1);
+  result:=vmcall(@vmcallinfo);
 end;
 
 procedure dbvm_writeMSR(msr: dword; value: qword);
@@ -1115,7 +1314,7 @@ begin
   vmcallinfo.command:=VMCALL_WRITEMSR;
   vmcallinfo.msr:=msr;
   vmcallinfo.msrvalue:=value;
-  vmcall(@vmcallinfo,vmx_password1);
+  vmcall(@vmcallinfo);
 end;
 
 function dbvm_getMemory(var pages: QWORD): QWORD;
@@ -1128,7 +1327,7 @@ begin
   vmcallinfo.structsize:=sizeof(vmcallinfo);
   vmcallinfo.level2pass:=vmx_password2;
   vmcallinfo.command:=VMCALL_GETMEM;
-  result:=vmcall2(@vmcallinfo,vmx_password1, @pages);
+  result:=vmcall2(@vmcallinfo, @pages);
 end;
 
 function dbvm_jtagbp: boolean;
@@ -1141,7 +1340,7 @@ begin
   vmcallinfo.structsize:=sizeof(vmcallinfo);
   vmcallinfo.level2pass:=vmx_password2;
   vmcallinfo.command:=VMCALL_JTAGBP;
-  result:=vmcall(@vmcallinfo,vmx_password1)<>0;
+  result:=vmcall(@vmcallinfo)<>0;;
 end;
 
 procedure dbvm_psod;
@@ -1154,7 +1353,7 @@ begin
   vmcallinfo.structsize:=sizeof(vmcallinfo);
   vmcallinfo.level2pass:=vmx_password2;
   vmcallinfo.command:=VMCALL_TESTPSOD;
-  vmcall(@vmcallinfo,vmx_password1);
+  vmcall(@vmcallinfo);
 end;
 
 
@@ -1168,7 +1367,7 @@ begin
   vmcallinfo.structsize:=sizeof(vmcallinfo);
   vmcallinfo.level2pass:=vmx_password2;
   vmcallinfo.command:=VMCALL_GETNMICOUNT;
-  result:=vmcall(@vmcallinfo,vmx_password1);
+  result:=vmcall(@vmcallinfo);
 end;
 
 function dbvm_getRealCR0: QWORD;
@@ -1181,7 +1380,7 @@ begin
   vmcallinfo.structsize:=sizeof(vmcallinfo);
   vmcallinfo.level2pass:=vmx_password2;
   vmcallinfo.command:=VMCALL_GETCR0;
-  result:=vmcall(@vmcallinfo,vmx_password1);
+  result:=vmcall(@vmcallinfo);
 end;
 
 function dbvm_getRealCR3: QWORD;
@@ -1194,7 +1393,7 @@ begin
   vmcallinfo.structsize:=sizeof(vmcallinfo);
   vmcallinfo.level2pass:=vmx_password2;
   vmcallinfo.command:=VMCALL_GETCR3;
-  result:=vmcall(@vmcallinfo,vmx_password1);
+  result:=vmcall(@vmcallinfo);
 end;
 
 function dbvm_getRealCR4: QWORD;
@@ -1207,7 +1406,7 @@ begin
   vmcallinfo.structsize:=sizeof(vmcallinfo);
   vmcallinfo.level2pass:=vmx_password2;
   vmcallinfo.command:=VMCALL_GETCR4;
-  result:=vmcall(@vmcallinfo,vmx_password1);
+  result:=vmcall(@vmcallinfo);
 end;
 
 procedure dbvm_switchToKernelMode(cs: word; rip: pointer; parameters: pointer);
@@ -1230,16 +1429,18 @@ begin
   vmcallinfo.cs:=cs;
   vmcallinfo.rip:=ptruint(rip);
   vmcallinfo.parameters:=ptruint(parameters);
-  vmcall(@vmcallinfo,vmx_password1);
+  vmcall(@vmcallinfo);
 end;
 
 
-function dbvm_watch_writes(PhysicalAddress: QWORD; size: integer; Options: DWORD; MaxEntryCount: Integer): integer;
+function dbvm_watch_writes(PhysicalAddress: QWORD; size: integer; Options: DWORD; MaxEntryCount: Integer; UserModeLoop: qword=0; KernelModeLoop: qword=0): integer;
 var vmcallinfo: packed record
       structsize: dword;   //0
       level2pass: dword;   //4
       command: dword;      //8
       PhysicalAddress: QWORD; //12
+      OptionalField1: QWORD;
+      OptionalField2: QWORD;
       Size: integer;          //20
       Options: DWORD;         //24
       MaxEntryCount: integer; //28
@@ -1256,6 +1457,8 @@ begin
   vmcallinfo.command:=VMCALL_WATCH_WRITES;
 
   vmcallinfo.PhysicalAddress:=PhysicalAddress;
+  vmcallinfo.OptionalField1:=UserModeLoop;
+  vmcallinfo.OptionalField2:=KernelModeLoop;
   vmcallinfo.Size:=size;
   vmcallinfo.Options:=Options;
   vmcallinfo.MaxEntryCount:=MaxEntryCount;
@@ -1264,7 +1467,7 @@ begin
   OutputDebugString('MaxEntryCount at offset '+inttostr(QWORD(@vmcallinfo.MaxEntryCount)-QWORD(@vmcallinfo)));
 
   OutputDebugString('vmcallinfo.MaxEntryCount='+inttostr(vmcallinfo.MaxEntryCount));
-  r:=vmcall(@vmcallinfo,vmx_password1);
+  r:=vmcall(@vmcallinfo);
   OutputDebugString('r='+inttostr(r));
 
   if r=0 then
@@ -1273,12 +1476,14 @@ begin
   OutputDebugString('returning '+inttostr(result));
 end;
 
-function dbvm_watch_reads(PhysicalAddress: QWORD; size: integer; Options: DWORD; MaxEntryCount: Integer): integer;
+function dbvm_watch_reads(PhysicalAddress: QWORD; size: integer; Options: DWORD; MaxEntryCount: Integer; UserModeLoop: qword=0; KernelModeLoop: qword=0): integer;
 var vmcallinfo: packed record
       structsize: dword;   //0
       level2pass: dword;   //4
       command: dword;      //8
       PhysicalAddress: QWORD; //12
+      OptionalField1: QWORD;
+      OptionalField2: QWORD;
       Size: integer;          //20
       Options: DWORD;         //24
       MaxEntryCount: integer; //28
@@ -1294,6 +1499,8 @@ begin
   vmcallinfo.level2pass:=vmx_password2;
   vmcallinfo.command:=VMCALL_WATCH_READS;
   vmcallinfo.PhysicalAddress:=PhysicalAddress;
+  vmcallinfo.OptionalField1:=UserModeLoop;
+  vmcallinfo.OptionalField2:=KernelModeLoop;
   vmcallinfo.Size:=size;
   vmcallinfo.Options:=Options;
   vmcallinfo.MaxEntryCount:=MaxEntryCount;
@@ -1302,7 +1509,7 @@ begin
   OutputDebugString('MaxEntryCount at offset '+inttostr(QWORD(@vmcallinfo.MaxEntryCount)-QWORD(@vmcallinfo)));
 
   OutputDebugString('vmcallinfo.MaxEntryCount='+inttostr(vmcallinfo.MaxEntryCount));
-  r:=vmcall(@vmcallinfo,vmx_password1);
+  r:=vmcall(@vmcallinfo);
   OutputDebugString('r='+inttostr(r));
 
   if r=0 then
@@ -1311,12 +1518,14 @@ begin
   OutputDebugString('returning '+inttostr(result));
 end;
 
-function dbvm_watch_executes(PhysicalAddress: QWORD; size: integer; Options: DWORD; MaxEntryCount: Integer): integer;
+function dbvm_watch_executes(PhysicalAddress: QWORD; size: integer; Options: DWORD; MaxEntryCount: Integer; UserModeLoop: qword=0; KernelModeLoop: qword=0): integer;
 var vmcallinfo: packed record
       structsize: dword;   //0
       level2pass: dword;   //4
       command: dword;      //8
       PhysicalAddress: QWORD; //12
+      OptionalField1:   QWORD;
+      OptionalField2:   QWORD;
       Size: integer;          //20
       Options: DWORD;         //24
       MaxEntryCount: integer; //28
@@ -1332,15 +1541,19 @@ begin
   vmcallinfo.level2pass:=vmx_password2;
   vmcallinfo.command:=VMCALL_WATCH_EXECUTES;
   vmcallinfo.PhysicalAddress:=PhysicalAddress;
+  vmcallinfo.OptionalField1:=UserModeLoop;
+  vmcallinfo.OptionalField2:=KernelModeLoop;
   vmcallinfo.Size:=size;
   vmcallinfo.Options:=Options;
+
+
   vmcallinfo.MaxEntryCount:=MaxEntryCount;
   vmcallinfo.ID:=-1;
 
   OutputDebugString('MaxEntryCount at offset '+inttostr(QWORD(@vmcallinfo.MaxEntryCount)-QWORD(@vmcallinfo)));
 
   OutputDebugString('vmcallinfo.MaxEntryCount='+inttostr(vmcallinfo.MaxEntryCount));
-  r:=vmcall(@vmcallinfo,vmx_password1);
+  r:=vmcall(@vmcallinfo);
   OutputDebugString('r='+inttostr(r));
 
   if r=0 then
@@ -1360,7 +1573,7 @@ var vmcallinfo: packed record
   copied: DWORD;
 end;
 begin
-  //OutputDebugString('vmxfunctions.pas: dbvm_watch_retrievelog (results='+inttohex(QWORD(results),8)+' resultsize='+inttostr(resultsize)+')');
+ // OutputDebugString('vmxfunctions.pas: dbvm_watch_retrievelog for ID '+inttostr(id)+' (results='+inttohex(QWORD(results),8)+' resultsize='+inttostr(resultsize)+')');
   result:=1;
   vmcallinfo.structsize:=sizeof(vmcallinfo);
   vmcallinfo.level2pass:=vmx_password2;
@@ -1370,10 +1583,10 @@ begin
   vmcallinfo.resultssize:=resultsize;
   vmcallinfo.copied:=0;
 
-  result:=vmcall(@vmcallinfo,vmx_password1);  //returns 2 on a too small size
+  result:=vmcall(@vmcallinfo);  //returns 2 on a too small size
   resultsize:=vmcallinfo.resultssize;
 
-  //OutputDebugString('dbvm_watch_retrievelog vmcall returned '+inttostr(result)+'  (resultsize='+inttostr(resultsize)+')');
+ // OutputDebugString('dbvm_watch_retrievelog vmcall returned '+inttostr(result)+'  (resultsize='+inttostr(resultsize)+')');
 
   resultsize:=vmcallinfo.resultssize;
 end;
@@ -1390,16 +1603,156 @@ begin
   vmcallinfo.level2pass:=vmx_password2;
   vmcallinfo.command:=VMCALL_WATCH_DELETE;
   vmcallinfo.ID:=ID;
-  result:=vmcall(@vmcallinfo,vmx_password1)=0;  //returns 0 on success
+  result:=vmcall(@vmcallinfo)=0;  //returns 0 on success
 end;
 
-function dbvm_cloak_activate(PhysicalBase: QWORD; virtualAddress: QWORD=0): integer;
+function dbvm_watch_getstatus(out last: TEPTWatchLogData; out best: TEPTWatchLogData): boolean; //just a debug function to verify things work without the need to attach a debugger to dbvm
+var vmcallinfo: packed record
+  structsize: dword;
+  level2pass: dword;
+  command: dword;
+  last: TEPTWatchLogData;
+  best: TEPTWatchLogData;
+end;
+begin
+  vmcallinfo.structsize:=sizeof(vmcallinfo);
+  vmcallinfo.level2pass:=vmx_password2;
+  vmcallinfo.command:=VMCALL_WATCH_GETSTATUS;
+  result:=vmcall(@vmcallinfo)=0;  //returns 0 on success
+
+  if result then
+  begin
+    last:=vmcallinfo.last;
+    best:=vmcallinfo.best;
+  end;
+end;
+
+function dbvm_bp_getBrokenThreadListSize:integer;
+var
+  vmcallinfo: packed record
+    structsize: dword;
+    level2pass: dword;
+    command: dword;
+  end;
+begin
+  vmcallinfo.structsize:=sizeof(vmcallinfo);
+  vmcallinfo.level2pass:=vmx_password2;
+  vmcallinfo.command:=VMCALL_GETBROKENTHREADLISTSIZE;
+  result:=vmcall(@vmcallinfo);
+end;
+
+
+function dbvm_bp_getBrokenThreadEventShort(id: integer; var shortstate: TDBVMBPShortState):integer;
+var
+  vmcallinfo: packed record
+    structsize: dword;
+    level2pass: dword;
+    command: dword;
+    id: integer;
+    watchid: integer;
+    status: integer;
+    cs: DWORD;
+    rip: QWORD;
+    cr3: QWORD;
+    FSBASE: QWORD;
+    GSBASE: qword;
+    GSBASE_KERNEL: qword;
+    Heartbeat: qword;
+  end;
+begin
+  vmcallinfo.structsize:=sizeof(vmcallinfo);
+  vmcallinfo.level2pass:=vmx_password2;
+  vmcallinfo.command:=VMCALL_GETBROKENTHREADENTRYSHORT;
+  vmcallinfo.id:=id;
+  result:=vmcall(@vmcallinfo);
+
+  if result=0 then
+  begin
+    shortstate.watchid:=vmcallinfo.watchid;
+    shortstate.status:=vmcallinfo.status;
+    shortstate.cs:=vmcallinfo.cs;
+    shortstate.rip:=vmcallinfo.rip;
+    shortstate.cr3:=vmcallinfo.cr3;
+    shortstate.FSBASE:=vmcallinfo.FSBASE;
+    shortstate.GSBASE:=vmcallinfo.GSBASE;
+    shortstate.GSBASE_KERNEL:=vmcallinfo.GSBASE_KERNEL;
+    shortstate.Heartbeat:=vmcallinfo.Heartbeat;
+  end;
+end;
+
+function dbvm_bp_getBrokenThreadEventFull(id: integer; out watchid: integer; out status: integer; out state: TPageEventExtended): integer;
+var
+  vmcallinfo: packed record
+    structsize: dword;
+    level2pass: dword;
+    command: dword;
+    id: integer;
+    watchid: integer;
+    status: integer;
+    state: TPageEventExtended;
+  end;
+begin
+  vmcallinfo.structsize:=sizeof(vmcallinfo);
+  vmcallinfo.level2pass:=vmx_password2;
+  vmcallinfo.command:=VMCALL_GETBROKENTHREADENTRYFULL;
+  vmcallinfo.id:=id;
+  result:=vmcall(@vmcallinfo);
+
+  if result=0 then
+  begin
+    watchid:=vmcallinfo.watchid;
+    state:=vmcallinfo.state;
+    status:=vmcallinfo.status;
+  end;
+end;
+
+function dbvm_bp_setBrokenThreadEventFull(id: integer; state: TPageEventExtended):integer;
+var
+  vmcallinfo: packed record
+    structsize: dword;
+    level2pass: dword;
+    command: dword;
+    id: integer;
+    state: TPageEventExtended;
+  end;
+begin
+  vmcallinfo.structsize:=sizeof(vmcallinfo);
+  vmcallinfo.level2pass:=vmx_password2;
+  vmcallinfo.command:=VMCALL_SETBROKENTHREADENTRYFULL;
+  vmcallinfo.id:=id;
+  vmcallinfo.state:=state;
+  result:=vmcall(@vmcallinfo);
+end;
+
+function dbvm_bp_resumeBrokenThread(id: integer; continueMethod: integer): integer;
+var
+  vmcallinfo: packed record
+    structsize: dword;
+    level2pass: dword;
+    command: dword;
+    id: integer;
+    continueMethod: integer;
+  end;
+begin
+  OutputDebugString(format('dbvm_bp_resumeBrokenThread(%d,%d)',[id, continueMethod]));
+  vmcallinfo.structsize:=sizeof(vmcallinfo);
+  vmcallinfo.level2pass:=vmx_password2;
+  vmcallinfo.command:=VMCALL_RESUMEBROKENTHREAD;
+  vmcallinfo.id:=id;
+  vmcallinfo.continueMethod:=continueMethod;
+  result:=vmcall(@vmcallinfo);
+end;
+
+
+
+function dbvm_cloak_activate(PhysicalBase: QWORD; virtualAddress: QWORD=0; mode: integer=1): integer;
 var
   vmcallinfo: packed record
     structsize: dword;
     level2pass: dword;
     command: dword;
     PhysicalBase: QWORD;
+    Mode: QWORD;
   end;
   i: integer;
 begin
@@ -1410,7 +1763,8 @@ begin
   vmcallinfo.level2pass:=vmx_password2;
   vmcallinfo.command:=VMCALL_CLOAK_ACTIVATE;
   vmcallinfo.PhysicalBase:=PhysicalBase;
-  result:=vmcall(@vmcallinfo,vmx_password1);
+  vmcallinfo.Mode:=mode;
+  result:=vmcall(@vmcallinfo);
 
   outputdebugstring('dbvm_cloak_activate: result='+inttostr(result));
 
@@ -1456,7 +1810,7 @@ begin
   vmcallinfo.level2pass:=vmx_password2;
   vmcallinfo.command:=VMCALL_CLOAK_DEACTIVATE;
   vmcallinfo.PhysicalBase:=PhysicalBase;
-  result:=vmcall(@vmcallinfo,vmx_password1)<>0;
+  result:=vmcall(@vmcallinfo)<>0;;
 
   if result and (cloakedregionscs<>nil) then
   begin
@@ -1526,7 +1880,7 @@ begin
   vmcallinfo.command:=VMCALL_CLOAK_READORIGINAL;
   vmcallinfo.PhysicalBase:=PhysicalBase;
   vmcallinfo.destination:=qword(destination);
-  result:=vmcall(@vmcallinfo,vmx_password1);
+  result:=vmcall(@vmcallinfo);
 end;
 
 function dbvm_cloak_writeoriginal(PhysicalBase: QWORD; source: pointer): integer;
@@ -1543,9 +1897,185 @@ begin
   vmcallinfo.command:=VMCALL_CLOAK_WRITEORIGINAL;
   vmcallinfo.PhysicalBase:=PhysicalBase;
   vmcallinfo.source:=qword(source);
-  result:=vmcall(@vmcallinfo,vmx_password1);
+  result:=vmcall(@vmcallinfo);
 end;
 
+
+function dbvm_cloak_traceonbp_readlog(results: PTracerListDescriptor; var resultsize: integer): integer;
+var vmcallinfo: packed record
+  structsize: dword;
+  level2pass: dword;
+  command: dword;
+  results: QWORD;
+  resultssize: DWORD;
+  copied: DWORD;
+end;
+begin
+  OutputDebugString('vmxfunctions.pas: dbvm_cloak_traceonbp_readlog (results='+inttohex(QWORD(results),8)+' resultsize='+inttostr(resultsize)+')');
+  result:=1;
+  vmcallinfo.structsize:=sizeof(vmcallinfo);
+  vmcallinfo.level2pass:=vmx_password2;
+  vmcallinfo.command:=VMCALL_CLOAK_TRACEONBP_READLOG;
+  vmcallinfo.results:=QWORD(results);
+  vmcallinfo.resultssize:=resultsize;
+  vmcallinfo.copied:=0;
+
+  result:=vmcall(@vmcallinfo);  //returns 2 on a too small size
+  resultsize:=vmcallinfo.resultssize;
+
+  OutputDebugString('vmxfunctions.pas: dbvm_cloak_traceonbp_readlog returned '+inttostr(result)+' resultsize='+inttostr(resultsize)+' vmcallinfo.copied='+inttostr(vmcallinfo.copied));
+end;
+
+function dbvm_cloak_traceonbp_remove(PhysicalAddress: QWORD=0; force: boolean=false): integer;
+var
+  vmcallinfo: packed record
+    structsize: dword;
+    level2pass: dword;
+    command: dword;
+    forced: DWORD;
+  end;
+  i,j: integer;
+begin
+  vmcallinfo.structsize:=sizeof(vmcallinfo);
+  vmcallinfo.level2pass:=vmx_password2;
+  vmcallinfo.command:=VMCALL_CLOAK_TRACEONBP_REMOVE;
+  vmcallinfo.forced:=ifthen(force,1,0);
+  result:=vmcall(@vmcallinfo);
+
+  if PhysicalAddress<>0 then
+  begin
+    breakpointsCS.Enter;
+    for i:=0 to length(breakpoints)-1 do
+      if breakpoints[i].PhysicalAddress=PhysicalAddress then
+      begin
+        for j:=i to length(breakpoints)-2 do
+          breakpoints[j]:=breakpoints[j+1];
+
+        setlength(breakpoints, length(breakpoints)-1);
+        break;
+      end;
+
+    if (GetCurrentThreadId=MainThreadID) and (frmbreakPointList<>nil) and (frmbreakPointList.visible) then
+      frmbreakPointList.updatebplist;
+
+    hassetbp:=length(breakpoints)<>0;
+
+    breakpointsCS.Leave;
+
+    flushCloakedMemoryCache(PhysicalAddress); //flush out that int3 which will confuse users for half a second
+  end;
+
+end;
+
+function dbvm_cloak_traceonbp_getstatus(out count: dword; out max: dword): integer;
+var
+  vmcallinfo: packed record
+    structsize: dword;
+    level2pass: dword;
+    command: dword;
+    count: dword;
+    max: dword;
+  end;
+begin
+  vmcallinfo.structsize:=sizeof(vmcallinfo);
+  vmcallinfo.level2pass:=vmx_password2;
+  vmcallinfo.command:=VMCALL_CLOAK_TRACEONBP_GETSTATUS;
+
+  result:=vmcall(@vmcallinfo);
+
+  OutputDebugString(pchar(format('dbvm_cloak_traceonbp_getstatus:  result=%d count=%d max=%d',[result, vmcallinfo.count, vmcallinfo.max])));
+
+
+  count:=vmcallinfo.count;
+  max:=vmcallinfo.max;
+end;
+
+function dbvm_cloak_traceonbp_stoptrace: integer;
+var
+  vmcallinfo: packed record
+    structsize: dword;
+    level2pass: dword;
+    command: dword;
+  end;
+
+begin
+  vmcallinfo.structsize:=sizeof(vmcallinfo);
+  vmcallinfo.level2pass:=vmx_password2;
+  vmcallinfo.command:=VMCALL_CLOAK_TRACEONBP_STOPTRACE;
+
+  result:=vmcall(@vmcallinfo);
+
+  flushCloakedMemoryCache;
+end;
+
+
+function dbvm_cloak_traceonbp(PhysicalAddress: QWORD; count: integer; options: dword; VirtualAddress: qword=0): integer;
+var
+  vmcallinfo: packed record
+    structsize: dword;
+    level2pass: dword;
+    command: dword;
+    PhysicalAddress: QWORD;
+    flags: DWORD;
+    tracecount: DWORD;
+  end;
+
+  ob: byte;
+  br: ptruint;
+  i: integer;
+  PhysicalBase: qword;
+begin
+  if virtualaddress<>0 then
+    ReadProcessMemory(processhandle, pointer(virtualaddress), @ob,1,br);
+
+  vmcallinfo.structsize:=sizeof(vmcallinfo);
+  vmcallinfo.level2pass:=vmx_password2;
+  vmcallinfo.command:=VMCALL_CLOAK_TRACEONBP;
+  vmcallinfo.PhysicalAddress:=PhysicalAddress;
+  vmcallinfo.flags:=options;
+  vmcallinfo.tracecount:=count;
+  result:=vmcall(@vmcallinfo);
+
+  outputdebugstring('dbvm_cloak_traceonbp returned '+inttostr(result));
+
+
+  if (result=0) then
+  begin
+    breakpointsCS.enter;
+    setlength(breakpoints,length(breakpoints)+1);
+    breakpoints[length(breakpoints)-1].PhysicalAddress:=PhysicalAddress;
+    breakpoints[length(breakpoints)-1].VirtualAddress:=virtualAddress;
+    breakpoints[length(breakpoints)-1].BreakOption:=integer(bo_BreakAndTrace);
+    breakpoints[length(breakpoints)-1].originalbyte:=ob;
+    hassetbp:=true;
+    breakpointscs.leave;
+
+    if (VirtualAddress<>0) then
+    begin
+      cloakedregionscs.Enter;
+      try
+        PhysicalBase:=PhysicalAddress and MAXPHYADDRMASKPB;
+
+        for i:=0 to length(cloakedregions)-1 do
+          if cloakedregions[i].PhysicalAddress=PhysicalBase then exit;   //already in the list
+
+        i:=length(cloakedregions);
+        setlength(cloakedregions,i+1);
+        cloakedregions[i].PhysicalAddress:=PhysicalBase;
+        cloakedregions[i].virtualAddress:=virtualAddress and qword($fffffffffffff000);
+
+        outputdebugstring('added it to entry '+inttostr(i));
+      finally
+        cloakedregionscs.leave;
+      end;
+    end;
+
+    if (GetCurrentThreadId=MainThreadID) and (frmbreakPointList<>nil) and (frmbreakPointList.visible) then
+      frmbreakPointList.updatebplist;
+  end
+  else
+    log('VMCALL_CLOAK_TRACEONBP failed. it returned '+inttohex(result,8));
+end;
 
 function dbvm_cloak_changeregonbp(PhysicalAddress: QWORD; var changeregonbpinfo: TChangeRegOnBPInfo; VirtualAddress: qword=0): integer;
 var
@@ -1563,7 +2093,7 @@ var
   ob: byte;
   br: size_t;
 begin
-  log('dbvm_cloak_changeregonbp');
+  log(format('dbvm_cloak_changeregonbp(%x,struct,%x)',[PhysicalAddress, VirtualAddress]));
 
   if virtualaddress<>0 then
     ReadProcessMemory(processhandle, pointer(virtualaddress), @ob,1,br);
@@ -1573,7 +2103,7 @@ begin
   vmcallinfo.command:=VMCALL_CLOAK_CHANGEREGONBP;
   vmcallinfo.PhysicalAddress:=PhysicalAddress;
   vmcallinfo.changeregonbpinfo:=changeregonbpinfo;
-  result:=vmcall(@vmcallinfo,vmx_password1);
+  result:=vmcall(@vmcallinfo);
 
   if (result=0) then
   begin
@@ -1627,7 +2157,7 @@ begin
   vmcallinfo.level2pass:=vmx_password2;
   vmcallinfo.command:=VMCALL_CLOAK_REMOVECHANGEREGONBP;
   vmcallinfo.PhysicalAddress:=PhysicalAddress;
-  result:=vmcall(@vmcallinfo,vmx_password1);
+  result:=vmcall(@vmcallinfo);
 
   breakpointsCS.Enter;
   for i:=0 to length(breakpoints)-1 do
@@ -1637,6 +2167,7 @@ begin
         breakpoints[j]:=breakpoints[j+1];
 
       setlength(breakpoints, length(breakpoints)-1);
+      break;
     end;
 
   if (GetCurrentThreadId=MainThreadID) and (frmbreakPointList<>nil) and (frmbreakPointList.visible) then
@@ -1698,6 +2229,22 @@ begin
   end;
 end;
 
+procedure dbvm_debug_setSpinlockTimeout(timeout: qword);
+var
+  vmcallinfo: packed record
+    structsize: dword;
+    level2pass: dword;
+    command: dword;
+    timeout: qword;
+  end;
+begin
+  vmcallinfo.structsize:=sizeof(vmcallinfo);
+  vmcallinfo.level2pass:=vmx_password2;
+  vmcallinfo.command:=VMCALL_DEBUG_SETSPINLOCKTIMEOUT;
+  vmcallinfo.timeout:=timeout;
+  vmcall(@vmcallinfo);
+end;
+
 function dbvm_get_statistics(out statistics: TDBVMStatistics):qword;
 var
   vmcallinfo: packed record
@@ -1711,7 +2258,7 @@ begin
   vmcallinfo.structsize:=sizeof(vmcallinfo);
   vmcallinfo.level2pass:=vmx_password2;
   vmcallinfo.command:=VMCALL_GET_STATISTICS;
-  result:=vmcall(@vmcallinfo,vmx_password1);
+  result:=vmcall(@vmcallinfo);
 
   CopyMemory(@statistics.eventCountersCurrentCPU[0],@vmcallinfo.eventcountercpu,sizeof(int)*56);
   CopyMemory(@statistics.eventCountersAllCPUS[0],@vmcallinfo.eventcounterall,sizeof(int)*56);
@@ -1740,7 +2287,7 @@ begin
     vmcallinfo.timeout:=2000;
   end;
 
-  vmcall(@vmcallinfo,vmx_password1);
+  vmcall(@vmcallinfo);
 end;
 
 procedure dbvm_speedhack_setSpeed(speed: double);
@@ -1756,10 +2303,45 @@ begin
   vmcallinfo.command:=VMCALL_SETSPEEDHACK;
   vmcallinfo.speed:=speed;
 
-  vmcall(@vmcallinfo,vmx_password1);
+  vmcall(@vmcallinfo);
 end;
 
 
+function dbvm_enableTSCHook_internal(parameters: pointer): BOOL; stdcall;
+var vmcallinfo: packed record
+  structsize: dword;
+  level2pass: dword;
+  command: dword;
+end;
+begin
+  vmcallinfo.structsize:=sizeof(vmcallinfo);
+  vmcallinfo.level2pass:=vmx_password2;
+  vmcallinfo.command:=VMCALL_ENABLETSCHOOK;
+  result:=vmcall(@vmcallinfo)<>0;;
+end;
+
+procedure dbvm_enableTSCHook;
+begin
+  foreachcpu(dbvm_enableTSCHook_internal,nil);
+end;
+
+function dbvm_disableTSCHook_internal(parameters: pointer): BOOL; stdcall;
+var vmcallinfo: packed record
+  structsize: dword;
+  level2pass: dword;
+  command: dword;
+end;
+begin
+  vmcallinfo.structsize:=sizeof(vmcallinfo);
+  vmcallinfo.level2pass:=vmx_password2;
+  vmcallinfo.command:=VMCALL_DISABLETSCHOOK;
+  result:=vmcall(@vmcallinfo)<>0;;
+end;
+
+function dbvm_disableTSCHook: boolean;
+begin
+  result:=foreachcpu(dbvm_disableTSCHook_internal,nil);
+end;
 
 procedure dbvm_ept_reset;
 var vmcallinfo: packed record
@@ -1771,7 +2353,7 @@ begin
   vmcallinfo.structsize:=sizeof(vmcallinfo);
   vmcallinfo.level2pass:=vmx_password2;
   vmcallinfo.command:=VMCALL_EPT_RESET;
-  vmcall(@vmcallinfo,vmx_password1);
+  vmcall(@vmcallinfo);
 
   if cloakedregionsCS<>nil then
   begin
@@ -1781,7 +2363,7 @@ begin
   end;
 end;
 
-function dbvm_log_cr3values_start: boolean;
+function dbvm_log_cr3_start(parameters: pointer): BOOL; stdcall;
 var vmcallinfo: packed record
   structsize: dword;
   level2pass: dword;
@@ -1791,7 +2373,27 @@ begin
   vmcallinfo.structsize:=sizeof(vmcallinfo);
   vmcallinfo.level2pass:=vmx_password2;
   vmcallinfo.command:=VMCALL_LOG_CR3VALUES_START;
-  result:=vmcall(@vmcallinfo,vmx_password1)<>0;
+  result:=vmcall(@vmcallinfo)<>0;;
+end;
+
+function dbvm_log_cr3values_start: boolean;
+begin
+  foreachcpu(dbvm_log_cr3_start,nil);
+end;
+
+function dbvm_log_cr3_fullstop(parameters: pointer): BOOL; stdcall;   //needed to stop the cr3 watch on the other cpus
+var vmcallinfo: packed record
+  structsize: dword;
+  level2pass: dword;
+  command: dword;
+  destination: QWORD;
+end;
+begin
+  vmcallinfo.structsize:=sizeof(vmcallinfo);
+  vmcallinfo.level2pass:=vmx_password2;
+  vmcallinfo.command:=VMCALL_LOG_CR3VALUES_STOP;
+  vmcallinfo.destination:=0; //turn off
+  result:=vmcall(@vmcallinfo)<>0;;
 end;
 
 function dbvm_log_cr3values_stop(log: pointer): boolean;
@@ -1806,7 +2408,208 @@ begin
   vmcallinfo.level2pass:=vmx_password2;
   vmcallinfo.command:=VMCALL_LOG_CR3VALUES_STOP;
   vmcallinfo.destination:=ptruint(log);
-  result:=vmcall(@vmcallinfo,vmx_password1)<>0;
+  result:=vmcall(@vmcallinfo)<>0;;
+
+  foreachcpu(dbvm_log_cr3_fullstop,nil);
+end;
+
+
+var
+  PIDToCR3Map: tmap;
+  dbvm_findCR3_CS: TCriticalsection;
+
+function dbvm_findCR3(hProcess: thandle): QWORD;
+{
+Finds a compatible CR3
+on systems with PID enabled there could be 2. a usermode and a system CR3
+Right now it doesn't care which one is found
+
+on fail, return 0
+}
+var
+  processheader: record
+    address: ptruint;
+    data: array[0..4095] of byte;
+  end;
+
+  teb: record
+    address: ptruint;
+    data: array[0..79] of byte;
+  end;
+
+  allocated: record
+    address: ptruint; //last resort
+    data: array[0..15] of byte;
+  end;
+
+  pid: qword;
+  r: qword;
+  ths: thandle;
+  me32: TModuleEntry32;
+  te32: TThreadEntry32;
+  x: ptruint;
+
+  th: THandle;
+  tbi: _THREAD_BASIC_INFORMATION;
+
+  cr3log: array [0..512] of qword;
+  i: integer;
+
+  temp: array [0..8191] of byte;
+begin
+  processheader.address:=0;
+  teb.address:=0;
+  allocated.address:=0;
+
+  result:=0;
+  {$ifdef windows}
+
+  dbvm_findCR3_CS.enter;
+  try
+    if (hprocess=0) or (hprocess=ptruint(-1)) or (hprocess=ptruint(-2)) then exit;
+
+    pid:=0;
+    if assigned(NewKernelHandler.GetProcessId) then
+      pid:=GetProcessId(hProcess);
+
+    if pid=0 then exit; //please use a valid handle
+
+    if PIDToCR3Map=nil then
+      PIDToCR3Map:=TMap.Create(ituPtrSize,8);
+
+    if PIDToCR3Map.GetData(pid,r) then
+      exit(r);
+
+
+    processheader.address:=0;
+
+    //find the process base module
+    ths:=CreateToolhelp32Snapshot(TH32CS_SNAPMODULE or TH32CS_SNAPMODULE32, pid);
+    zeromemory(@me32,sizeof(me32));
+    me32.dwSize:=sizeof(me32);
+    if module32first(ths,me32) then
+      processheader.address:=ptruint(me32.modBaseAddr);
+
+    closehandle(ths);
+
+    //find the first thread
+
+    ths:=CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, pid);
+    zeromemory(@te32,sizeof(te32));
+    te32.dwSize:=sizeof(te32);
+    if Thread32First(ths,te32) then
+    repeat
+      if te32.th32OwnerProcessID=pid then
+      begin
+        th:=OpenThread(ifthen(GetSystemType<=6,THREAD_QUERY_INFORMATION, THREAD_QUERY_LIMITED_INFORMATION), false, te32.th32ThreadID);
+
+        if NtQueryInformationThread(th, ThreadBasicInformation, @tbi, sizeof(tbi), @x)=0 then
+          teb.address:=qword(tbi.TebBaseAddress)
+        else
+          teb.address:=0;
+
+        closehandle(th);
+
+
+        break;
+      end;
+    until Thread32Next(ths,te32)=false;
+
+    for i:=0 to 15 do
+      allocated.data[i]:=random(255);
+
+    if (processheader.address=0) and (teb.address=0) then
+    begin
+      allocated.address:=ptruint(VirtualAllocEx(hprocess, nil,4096,MEM_COMMIT or MEM_RESERVE, PAGE_READWRITE));
+      if allocated.address=0 then exit; //give up
+    end;
+
+    zeromemory(@cr3log, 4096);
+
+    if dbvm_log_cr3values_start then
+    begin
+      if processheader.address<>0 then
+        if readProcessMemory(hprocess, pointer(processheader.address), @processheader.data, 4096,x)=false then
+          processheader.address:=0;
+
+      if teb.address<>0 then
+        if readProcessMemory(hprocess, pointer(teb.address), @teb.data, 80,x)=false then
+          teb.address:=0;
+
+      if (processheader.address=0) and (teb.address=0) and (allocated.address=0) then       //last attempt to save this operation
+        allocated.address:=ptruint(VirtualAllocEx(hprocess, nil,4096,MEM_COMMIT or MEM_RESERVE, PAGE_READWRITE));
+
+      if allocated.address<>0 then
+      begin
+
+        if WriteProcessMemory(hProcess, pointer(allocated.address), @allocated.data[0],80,x)=false then
+        begin
+          //fuuuuuck
+          VirtualFreeEx(hprocess, pointer(allocated.address),0,MEM_RELEASE);
+          allocated.address:=0;
+        end;
+      end;
+
+      if dbvm_log_cr3values_stop(@cr3log[0]) then
+      begin
+        //cleanup memory
+
+        if allocated.address<>0 then
+          VirtualFreeEx(hprocess, pointer(allocated.address),0,MEM_RELEASE);
+
+        //go through the list of CR3's and check which ones do not match
+        for i:=0 to 511 do
+        begin
+          if cr3log[i]<>0 then
+          begin
+            if processheader.address<>0 then
+            begin
+              if ReadProcessMemoryCR3(cr3log[i],pointer(processheader.address),@temp[0],4096,x) then
+              begin
+                if not CompareMem(@processheader.data[0], @temp[0], 4096) then
+                  continue;
+              end
+              else
+                continue;
+            end;
+
+            if teb.address<>0 then
+            begin
+              if ReadProcessMemoryCR3(cr3log[i],pointer(teb.address),@temp[0],80,x) then
+              begin
+                if not CompareMem(@teb.data[0], @temp[0],80) then
+                  continue;
+              end
+              else
+                continue;
+            end;
+
+            if allocated.address<>0 then
+            begin
+              if ReadProcessMemoryCR3(cr3log[i],pointer(allocated.address),@temp[0],16,x) then
+              begin
+                if not CompareMem(@allocated.data[0], @temp[0],16) then
+                  continue;
+              end
+              else
+                continue;
+            end;
+
+            //still here so valid
+            r:=cr3log[i];
+            PIDToCR3Map.add(pid, r);
+            exit(cr3log[i]);
+          end
+          else
+            break;
+        end;
+      end;
+    end;
+
+  finally
+    dbvm_findCR3_CS.leave;
+  end;
+  {$endif}
 end;
 
 function dbvm_registerPlugin(pluginaddress: pointer; pluginsize: integer; plugintype: integer): integer;
@@ -1843,7 +2646,7 @@ begin
   vmcallinfo.byteSize:=pluginsize;
   vmcallinfo.reserved:=0;
   vmcallinfo.reserved2:=0;
-  result:=vmcall(@vmcallinfo,vmx_password1);
+  result:=vmcall(@vmcallinfo);
 end;
 
 procedure dbvm_raisePMI;
@@ -1856,7 +2659,7 @@ begin
   vmcallinfo.structsize:=sizeof(vmcallinfo);
   vmcallinfo.level2pass:=vmx_password2;
   vmcallinfo.command:=VMCALL_RAISEPMI;
-  vmcall(@vmcallinfo,vmx_password1);
+  vmcall(@vmcallinfo);
 end;
 
 procedure dbvm_ultimap2_hideRangeUsage; //hides thge range usage. You can call it as often as you like
@@ -1869,7 +2672,7 @@ begin
   vmcallinfo.structsize:=sizeof(vmcallinfo);
   vmcallinfo.level2pass:=vmx_password2;
   vmcallinfo.command:=VMCALL_ULTIMAP2_HIDERANGEUSAGE;
-  vmcall(@vmcallinfo,vmx_password1);
+  vmcall(@vmcallinfo);
 end;
 
 var kernelfunctions: Tstringlist;
@@ -1883,6 +2686,7 @@ var i,j: integer;
     base: ptruint;
     hal: tstringlist;
 begin
+  {$IFDEF windows}
   if kernelfunctions=nil then
   begin
     kernelfunctions:=tstringlist.create;
@@ -1924,8 +2728,12 @@ begin
 
     i:=kernelfunctions.IndexOf('ExAllocatePool');
     if i<>-1 then
+    begin
+      OutputDebugString('ExAllocatePool at '+inttohex(ptruint(kernelfunctions.Objects[i]),8));
       ExAllocatePool:=pointer(kernelfunctions.Objects[i]);
+    end;
   end;
+  {$ENDIF}
 
 end;
 
@@ -2350,54 +3158,154 @@ function dbvm_kernelalloc(size: dword): pointer;
 {
 use dbvm to allocate kernelmode memory
 }
-var command: TCommand;
+var
+  command: TCommand;
+  r: pointer;
 begin
   setupKernelFunctionList;
 
+  r:=nil;
+
   command.command:=0;
-  command.result:=@result;
+  command.result:=@r;
   command.param1:=size;
 
   dbvm_switchToKernelMode($10, @dbvm_localIntHandler_entry, @command);
+
+  result:=r;
 end;
 
 
 
-procedure configure_vmx(userpassword1,userpassword2: dword); //warning: not multithreaded, take care to only run at init!
+function getClientIDFromDBVMBPShortState(state: TDBVMBPShortState; out clientid: TClientID): boolean;
+//Tries to get the process and client id (won't work when it's in kernelmoade and swapped the process as gsbase usermode is unreadable
+var
+  umgsbase: qword;
+  br: ptruint;
+
+  pid32: dword;
+  tid32: dword;
+begin
+  {$ifdef windows}
+  umgsbase:=min(state.gsbase, state.gsbase_kernel);   //get the usermode gsbase
+
+  {$ifdef cpu64}
+  if umgsbase=0 then exit(false);
+  exit(ReadProcessMemoryCR3(state.cr3,pointer(umgsbase+$40),@clientid,16,br));
+  {$else}
+  if iswow64 then
+  begin
+    if umgsbase=0 then exit(false);
+    exit(ReadProcessMemoryCR3(state.cr3,pointer(umgsbase+$40),@clientid,16,br));
+  end
+  else
+  begin
+    //untested, I do not use 32-bit windows anymore
+    result:=ReadProcessMemoryCR3(state.cr3,pointer(state.fsbase+$20),@pid32,4,br);
+    if result then
+      result:=ReadProcessMemoryCR3(state.cr3,pointer(state.fsbase+$24),@tid32,4,br);
+
+    if result then
+    begin
+      clientid.UniqueProcess:=pid32;
+      clientid.UniqueThread:=tid32;
+    end;
+  end;
+  {$endif}
+
+
+  {$else}
+  exit(false);
+  {$endif}
+
+end;
+
+function getClientIDFromDBVMBPState(const state: TPageEventExtended; out clientid: TClientID): boolean;
+//convert a fullstate to a shortstate and call getClientIDFromDBVMBPShortState
+var short: TDBVMBPShortState;
+begin
+  short.watchid:=-1;
+  short.status:=0;
+  short.cs:=state.basic.cs;
+  short.rip:=state.basic.RIP;
+  short.cr3:=state.basic.CR3;
+  short.fsbase:=state.basic.FSBASE;
+  short.gsbase:=state.basic.GSBASE;
+  short.gsbase_kernel:=state.basic.GSBASE_KERNEL;
+  short.heartbeat:=1;
+  exit(getClientIDFromDBVMBPShortState(short,clientid));
+end;
+
+
+
+
+procedure configure_vmx(userpassword1: qword; userpassword2: dword; userpassword3: qword); //warning: not multithreaded, take care to only run at init!
+var r: dword;
 begin
   {$ifndef NOVMX}
   //configure dbvm if possible
-  OutputDebugString('configure_vmx');
+  OutputDebugString(format('configure_vmx(%.16x,%.8x,%.16x)', [userpassword1, userpassword2, userpassword3]));
 
   //first try the default password and if it works change the password to the userdefined one
-  vmx_password1:=$76543210;
-  vmx_password2:=$fedcba98;
+  if (dbvm_version=0) then //invalid password to begin with, use this as a config
+  begin
+    vmx_password1:=userpassword1;
+    vmx_password2:=userpassword2;
+    vmx_password3:=userpassword3;
 
-  if (dbvm_version>=$ce000000) and (userpassword1<>vmx_password1) and (userpassword2<>vmx_password2) then //this works, change the password
-    dbvm_changepassword(userpassword1,userpassword2);
+    if dbvm_version=0 then
+    begin
+      OutputDebugString('configure_vmx failed. Invalid initial state. Trying default');
+      vmx_password1:=$76543210;
+      vmx_password2:=$fedcba98;
+      vmx_password3:=$90909090;
 
-  vmx_password1:=userpassword1;
-  vmx_password2:=userpassword2;
+      if dbvm_version=0 then
+      begin
+        vmx_password1:=userpassword1;
+        vmx_password2:=userpassword2;
+        vmx_password3:=userpassword3;
+        exit; //invalid password (I hope you remembered, else you'll have to sleep)
+      end;
+      //else fall through to the changepassword part
+    end
+    else
+    begin
+      OutputDebugString('New password is correct');
+      exit;
+    end;
+  end
+  else
+    OutputDebugString('configure_vmx: Old password was correct. Changing it (if needed)');
+
+  r:=dbvm_changepassword(userpassword1,userpassword2, userpassword3);
+  OutputDebugString('dbvm_changepassword returned '+inttohex(r,1));
+
+  if r=0 then
+    configure_vmx_kernel;
   {$endif}
 end;
 
 
 procedure configure_vmx_kernel;
-type TInput=record
+type TInput=packed record
   Virtualization_Enabled: DWORD;
-	Password1: DWORD;
+  Password1: QWORD;
   Password2: DWORD;
+  Password3: QWORD;
 end;
 var cc: dword;
     x: TInput;
 begin
+  {$IFDEF windows}
   if (dbvm_version>$ce000000) then //tell the driver it can use vmcall instructions
   begin
     OutputDebugString('vmx_enabled=TRUE');
-    
+
     x.Virtualization_Enabled:=1;
     x.Password1:=vmx_password1;
     x.Password2:=vmx_password2;
+    x.Password3:=vmx_password3;
 
     if (hdevice<>INVALID_HANDLE_VALUE) then
     begin
@@ -2407,11 +3315,13 @@ begin
 
     vmx_enabled:=true;
   end else OutputDebugString('vmx_enabled=FALSE');
+  {$ENDIF}
 end;
 
 initialization
   vmcall:=vmcallUnSupported;
   vmcall2:=vmcall2Unsupported;
+  {$ifdef windows}
 
   {$ifndef NOVMX}
   if isDBVMCapable then
@@ -2430,6 +3340,9 @@ initialization
 
 
   {$endif}
+  {$endif}
   cloakedregionscs:=TCriticalSection.Create;
   breakpointscs:=TCriticalSection.Create;
+
+  dbvm_findCR3_CS:=TCriticalSection.create;
 end.

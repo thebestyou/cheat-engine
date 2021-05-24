@@ -6,7 +6,7 @@ interface
 
 uses
   Classes, SysUtils, FileUtil, Forms, Controls, Graphics, Dialogs, StdCtrls,
-  ExtCtrls;
+  ExtCtrls, betterControls;
 
 type
 
@@ -59,14 +59,17 @@ type
     { public declarations }
   end;
 
+  TfrmDBVMExecuteWatchConfig=class(TfrmDBVMWatchConfig);
+
 var
   frmDBVMWatchConfig: TfrmDBVMWatchConfig;
+  frmDBVMWatchConfigFindWhatCodeAccesses: TfrmDBVMExecuteWatchConfig;
 
 implementation
 
 {$R *.lfm}
 
-uses math,NewKernelHandler, ProcessHandlerUnit, vmxfunctions, registry;
+uses math,NewKernelHandler, ProcessHandlerUnit, vmxfunctions, registry{$ifdef darwin},macport{$endif};
 
 function TfrmDBVMWatchConfig.getMaxEntries: integer;
 begin
@@ -116,10 +119,11 @@ end;
 
 procedure TfrmDBVMWatchConfig.setWatchType(t:integer);
 begin
-  if t=0 then
-    rbWriteAccess.checked:=true
-  else
-    rbReadAccess.checked:=true;
+  case t of
+    0: rbWriteAccess.checked:=true;
+    1: rbReadAccess.checked:=true;
+    2: rbExecuteAccess.Checked:=true;
+  end;
 end;
 
 procedure TfrmDBVMWatchConfig.btnOKClick(Sender: TObject);
@@ -162,6 +166,9 @@ begin
       if reg.ValueExists('Log Stack') then cbSaveStack.checked:=reg.ReadBool('Log Stack');
       if reg.ValueExists('Multiple matching RIP') then cbMultipleRIP.checked:=reg.ReadBool('Multiple matching RIP');
       if reg.ValueExists('Max number of entries') then edtMaxEntries.text:=inttostr(reg.ReadInteger('Max number of entries'));
+      if reg.ValueExists('Log whole page') then cbWholePage.checked:=reg.ReadBool('Log whole page');
+
+      if reg.ValueExists('Watchtype') then Watchtype:=reg.ReadInteger('Watchtype');
     end;
 
 
@@ -186,9 +193,12 @@ begin
       reg.writeBool('Log FPU', cbSaveFPU.checked);
       reg.writeBool('Log Stack', cbSaveStack.checked);
       reg.writeBool('Multiple matching RIP', cbMultipleRIP.checked);
+      reg.writeBool('Log whole page', cbWholePage.checked);
 
       if TryStrToInt(edtMaxEntries.text, max) then
          reg.WriteInteger('Max number of entries', max);
+
+      reg.writeInteger('Watchtype', WatchType);
     end;
   finally
     reg.free;
@@ -203,8 +213,10 @@ end;
 procedure TfrmDBVMWatchConfig.setAddress(a: qword);
 var
   x: ptruint;
-  temp: byte;
+  temp: dword;
+  s: string;
 begin
+  {$ifdef windows}
   faddress:=a;
   lblVirtualAddress.caption:=format('Virtual Address=%.8x',[a]);
 
@@ -227,6 +239,7 @@ begin
     lblPhysicalAddress.caption:='Physical Address=invalid';
     lblPhysicalAddress.font.color:=clRed;
   end;
+  {$endif}
 end;
 
 end.

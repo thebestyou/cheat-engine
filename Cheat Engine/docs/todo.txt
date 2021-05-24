@@ -1,8 +1,28 @@
-globaldisassembleoverride is fucked
+Mac: Hex editing files
+
+Mac (and perhaps Windows):  speedhack: Do not go for dylib(dll) injection but assemble it inside the target (either directly or manual mapped)
+
+add {$C#-code} sections and {$C#} blocks (which end up as injected dll's)
+
+{$luacode} might like the allocated memory addresses afterwards  (perhaps generate a table with these variables inside the ref can later be filled in)
+
+DPI: symbol config address field is not correct
+
+DBVM: Add a "start record all PA access"  "stop record all PA access" which records the PA, VA, CR3, CS:RIP for each access
+DBVM: Add a local break and trace (not undetected single step flag)
+
+
+DBVM: give the "find what this instruction accessess" it's own dbvm config window so it doesn't override the userdefined options
+
+'sub rsp,20+(4*8)+(6*8)'
+set value to -888,12  (not -888.12) and see what happens
 
 
 structure dissect: 
   delete all structures sometimes AV's (no idea how to reproduce)
+
+lua function call: make it generate a full routine based on parameters to get, including stacksafe call
+
 
 
 memview paste: paste for specific displaytype
@@ -15,15 +35,11 @@ graphical memory view:
   change format makes it black sometimes(loses position ?)
   sometimes the x position is not 0, but can't be changed back
 
-
-dbvm_speedhack
-
 graphical tutorial: continue with it
 
 linux: make a 32-bit linux build with .so injection support
 memscan: Don't combine the scanresults into a single file. Leave them split up (skip: for 6.7 or 7.0)
 
-ceshare: continue with it
 pseudocode: continue with it
 mac version: work on it
 
@@ -35,11 +51,8 @@ pointerscan: when suspending a scan, CE closed itself(crash)
 
 test and fix the d3dhook stuff and trainer generator.  (perhaps dx12 support as well)
 
-add  access rights for the windows app user to pipes
 
-formdesigner: copy from outside a panel and paste into the panel will paste in the old location
 a timer causing a lua_error will eventually show c stack overflow
 
 
-dbvm: add maps and use them for cloaked regions
 mono plugin: When enumerating classes instead of getting a class get the typedefs only and get the info from the typedef info until an actual class is requested/expanded

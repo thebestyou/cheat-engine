@@ -7,19 +7,31 @@ unit LuaPipe;
 interface
 
 uses
-  windows, Classes, SysUtils, lua, LuaClass, syncobjs;
+  {$ifdef darwin}
+  macport,  macpipe, mactypes,
+  {$endif}
+  {$ifdef windows}
+  windows,
+  {$endif}
+  Classes, SysUtils, lua, LuaClass, syncobjs, guisafecriticalsection;
 
 type
   TPipeConnection=class
   private
     fOnTimeout: TNotifyEvent;
+    fOnError: TNotifyEvent;
+    procedure CloseConnection(n: TNotifyEvent);
+
+    {$ifdef windows}
+    function ProcessOverlappedOperation(o: POVERLAPPED): boolean;
+    {$endif}
   protected
     pipe: THandle;
     fconnected: boolean;
-    cs: TCriticalsection;
+    cs: TGuiSafeCriticalSection;
     foverlapped: boolean;
     ftimeout: integer;
-    overlappedevent: thandle;
+
   public
     procedure lock;
     procedure unlock;
@@ -51,14 +63,19 @@ type
   published
     property connected: boolean read fConnected;
     property OnTimeout: TNotifyEvent read fOnTimeout write fOnTimeout;
-
+    property OnError: TNotifyEvent read fOnError write fOnError;
+    property Handle: THandle read pipe write pipe;
   end;
 
 procedure pipecontrol_addMetaData(L: PLua_state; metatable: integer; userdata: integer );
 
+
 implementation
 
+
 uses LuaObject, LuaByteTable;
+
+threadvar WaitEvent: THandle;
 
 destructor TPipeConnection.destroy;
 begin
@@ -74,8 +91,7 @@ end;
 constructor TPipeConnection.create;
 begin
   ftimeout :=5000;
-  overlappedevent:=CreateEvent(nil,false,false,nil);
-  cs:=TCriticalSection.Create;
+  cs:=TGuiSafeCriticalSection.Create;
 end;
 
 procedure TPipeConnection.lock;
@@ -190,56 +206,111 @@ begin
   FreeMemAndNil(x);
 end;
 
+{$ifdef windows}
+
+function TPipeConnection.ProcessOverlappedOperation(o: POVERLAPPED): boolean;
+var
+  starttime: qword;
+  i: integer;
+  bt: dword;
+  r: dword;
+begin
+  starttime:=GetTickCount64;
+  while fconnected and ((ftimeout=0) or (gettickcount64<starttime+ftimeout)) do
+  begin
+    if MainThreadID=GetCurrentThreadId then
+    begin
+      CheckSynchronize;
+
+      r:=WaitForSingleObject(o^.hEvent, 25);
+      case r of
+        WAIT_OBJECT_0, WAIT_TIMEOUT: fconnected:=true;
+        else
+          fconnected:=false;
+      end;
+      if not fconnected then
+        closeConnection(fOnError);
+    end
+    else
+    begin
+     // sleep(10);
+      r:=WaitForSingleObject(o^.hEvent, ifthen<DWORD>(ftimeout=0, 1000, ftimeout));
+      case r of
+        WAIT_OBJECT_0, WAIT_TIMEOUT: fconnected:=true;
+        else
+          fconnected:=false;
+      end;
+      if not fconnected then
+        closeConnection(fOnError);
+    end;
+
+    if fconnected and (GetOverlappedResult(pipe, o^, bt,false)=false) then   //todo: check for GetOverlappedResultEx and use that
+    begin
+      i:=getlasterror;
+      if ((i=ERROR_IO_PENDING) or (i=ERROR_IO_INCOMPLETE)) then
+        continue
+      else
+      begin
+        closeConnection(fOnError);
+        exit(false);
+      end;
+    end
+    else
+      exit(fconnected);
+   end;
+
+   closeConnection(fOnTimeout);
+   exit(false);
+end;
+{$endif}
+
+procedure TPipeConnection.CloseConnection(n: TNotifyEvent);
+begin
+  fconnected:=false;
+  {$ifdef windows}
+  CancelIo(pipe);
+  closehandle(pipe);
+  {$endif}
+  {$ifdef darwin}
+  closepipe(pipe);
+  {$endif}
+  pipe:=0;
+  if assigned(n) then
+    n(self);
+end;
+
 function TPipeConnection.WriteBytes(bytes: pointer; size: integer): boolean;
+{$ifdef windows}
 var
   bw: dword;
   o: OVERLAPPED;
   starttime: qword;
   i: integer;
+  overlappedevent: thandle;
+  {$endif}
 begin
   if not fconnected then exit(false);
 
   if (bytes<>nil) and (size>0) then
   begin
+    {$ifdef windows}
     if foverlapped then
     begin
       zeromemory(@o, sizeof(o));
-      o.hEvent:=overlappedevent;
+
+      if waitevent=0 then
+        waitevent:=CreateEvent(nil,false,false,nil);
+
+      o.hEvent:=waitevent;
+      resetevent(o.hEvent);
+
       if writefile(pipe, bytes^, size, bw,@o)=false then
       begin
         if GetLastError=ERROR_IO_PENDING then
-        begin
-          fconnected:=fconnected or (WaitForSingleObject(o.hEvent, ftimeout)=WAIT_OBJECT_0);
-
-          starttime:=GetTickCount64;
-
-          while GetOverlappedResult(pipe, o, bw,false)=false do   //todo: check for GetOverlappedResultEx and use that
-          begin
-            i:=getlasterror;
-            if ((i=ERROR_IO_PENDING) or (i=ERROR_IO_INCOMPLETE)) and (gettickcount64<starttime+ftimeout) then
-              sleep(0)
-            else
-            begin
-              fconnected:=false;
-              CancelIo(pipe);
-              closehandle(pipe);
-              pipe:=0;
-              if assigned(fOnTimeout) then
-                fOnTimeout(self);
-              exit(false);
-
-
-            end;
-          end;
-
-          exit(true);
-        end
+          exit(ProcessOverlappedOperation(@o))
         else
         begin
-          fconnected:=false;
-          CancelIo(pipe);
-          closehandle(pipe);
-          pipe:=0;
+          closeConnection(fOnError);
           exit(false);
         end;
       end;
@@ -247,71 +318,68 @@ begin
     end
     else
       fconnected:=fconnected and writefile(pipe, bytes^, size, bw, nil);
+    {$endif}
+    {$ifdef darwin}
+    fconnected:=writepipe(pipe, bytes, size, ftimeout);
+    if fconnected=false then
+      closeConnection(fOnTimeout);
+    {$endif}
+
   end;
 
   result:=fconnected;
 end;
 
 function TPipeConnection.ReadBytes(bytes: pointer; size: integer): boolean;
+{$ifdef windows}
 var
   br: dword;
   o: OVERLAPPED;
   i: integer;
   starttime: qword;
+{$endif}
 begin
   if not fconnected then exit(false);
 
   if (bytes<>nil) and (size>0) then
   begin
+    {$ifdef windows}
     if foverlapped then
     begin
       zeromemory(@o, sizeof(o));
-      o.hEvent:=overlappedevent;
-      ResetEvent(o.hEvent);
+      if waitevent=0 then
+        waitevent:=CreateEvent(nil,false,false,nil);
+
+      o.hEvent:=waitevent;
+      resetevent(o.hEvent);
       if Readfile(pipe, bytes^, size, br,@o)=false then
       begin
         if GetLastError=ERROR_IO_PENDING then
-        begin
-          fconnected:=fconnected or (WaitForSingleObject(o.hEvent, ftimeout)=WAIT_OBJECT_0);
-
-          starttime:=GetTickCount64;
-
-          while GetOverlappedResult(pipe, o, br,false)=false do   //todo: check for GetOverlappedResultEx and use that
-          begin
-            i:=getlasterror;
-            if ((i=ERROR_IO_PENDING) or (i=ERROR_IO_INCOMPLETE)) and (gettickcount64<starttime+ftimeout) then
-              sleep(0)
-            else
-            begin
-              fconnected:=false;
-              CancelIo(pipe);
-              closehandle(pipe);
-              pipe:=0;
-              if assigned(fOnTimeout) then
-                fOnTimeout(self);
-
-              exit(false);
-            end;
-          end;
-
-          exit(true);
-        end
+          exit(ProcessOverlappedOperation(@o))
         else
         begin
-          fconnected:=false;
-          CancelIo(pipe);
-          closehandle(pipe);
-          pipe:=0;
+          closeConnection(fOnError);
           exit(false);
         end;
       end;
     end
     else
       fconnected:=fconnected and Readfile(pipe, bytes^, size, br, nil);
+    {$endif}
+    {$ifdef darwin}
+    fconnected:=readpipe(pipe,bytes,size,ftimeout);
+    if fconnected=false then
+      closeConnection(fOnTimeout);
+    {$endif}
   end;
 
 
   result:=fconnected;
+
+  if result=false then
+  asm
+  nop
+  end;
 end;
 
 function pipecontrol_writeBytes(L: PLua_State): integer; cdecl;
@@ -761,6 +829,7 @@ end;
 
 initialization
   luaclass_register(TPipeConnection, pipecontrol_addMetaData );
+
 
 
 end.

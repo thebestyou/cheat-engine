@@ -8,19 +8,34 @@ multiple sources. (e.g vmm and vmloader)
 #include "keyboard.h"
 #include "main.h"
 #include "mm.h"
+#include "displaydebug.h"
 
 //#include <ieee754.h>
 
 //#include <string.h>
 
+#ifdef DEBUG
+void sendstringf_nolock(char *string UNUSED, ...);
+#endif
+
 QWORD textmemory=0x0b8000;
 
-criticalSection sendstringfCS;
-criticalSection sendstringCS;
+QWORD spinlocktimeout=0;
+
+criticalSection sendstringfCS={.name="sendstringfCS", .debuglevel=1};
+criticalSection sendstringCS={.name="sendstringCS", .debuglevel=1};
+
+#ifdef DELAYEDSERIAL
+int useserial=0;
+#endif
+
 
 #if DISPLAYDEBUG==1
 int linessincelastkey=0;
 PStackList displaydebuglog_back, displaydebuglog_forward;
+
+
+
 #endif
 
 int screenheight=25;
@@ -67,6 +82,13 @@ unsigned char inportb(unsigned int port)
 
 void outportb(unsigned int port,unsigned char value)
 {
+#ifdef DEBUG
+  if (port==0x80)
+  {
+    nosendchar[getAPICID()]=0;
+    sendstringf_nolock("            -  Debug Code %2  -\n", value);
+  }
+#endif
    asm volatile ("outb %%al,%%dx": :"d" (port), "a" (value));
 }
 
@@ -83,12 +105,12 @@ void outportd(unsigned int port,unsigned long value)
 }
 
 
-int minq(QWORD x,QWORD y)
+QWORD minq(QWORD x,QWORD y)
 {
   return (x<y)?x:y;
 }
 
-int maxq(QWORD x,QWORD y)
+QWORD maxq(QWORD x,QWORD y)
 {
   return (x>y)?x:y;
 }
@@ -122,14 +144,18 @@ size_t strspn(const char *str, const char *chars)
 
 void exit(int status)
 {
-	sendstringf("Exited DBVM with status %d\n", status);
-	while (1);
+  nosendchar[getAPICID()]=0;
+	sendstringf("Exit DBVM with status %d\n", status);
+	ddDrawRectangle(0,DDVerticalResolution-100,100,100,0xff0000);
+	while (1) outportb(0x80,0xc0);
 }
 
 void abort(void)
 {
-  sendstringf("Exited DBVM\n");
-  while (1);
+  nosendchar[getAPICID()]=0;
+  sendstringf("Abort DBVM\n");
+  ddDrawRectangle(0,DDVerticalResolution-100,100,100,0xff0000);
+  while (1) outportb(0x80,0xc1);
 }
 
 
@@ -878,28 +904,65 @@ int vbuildstring(char *str, int size, char *string, __builtin_va_list arglist)
 
 void sendstring(char *s UNUSED)
 {
-#if DISPLAYDEBUG==1
-  displayline(s);
+#ifdef DELAYEDSERIAL
+  if (!useserial) return;
 #endif
+
 #ifdef DEBUG
-  int i;
+  #if DISPLAYDEBUG==1
+    displayline(s);
+  #else
+    int i;
 
-  if (nosendchar[getAPICID()])
-      return;
+    if (nosendchar[getAPICID()])
+        return;
 
 
-  csEnter(&sendstringCS);
+    csEnter(&sendstringCS);
 
-  for (i=0; s[i] ; i++)
-    sendchar(s[i]);
+    for (i=0; s[i] ; i++)
+      sendchar(s[i]);
 
-  csLeave(&sendstringCS);
+    csLeave(&sendstringCS);
+  #endif
 #endif
 }
 
+#ifdef DEBUG
+void sendstringf_nolock(char *string UNUSED, ...)
+{
+#ifdef DELAYEDSERIAL
+  if (!useserial) return;
+#endif
+  nosendchar[getAPICID()]=0;
+
+  __builtin_va_list arglist;
+  char temps[200];
+  int sl,i;
+
+  __builtin_va_start(arglist,string);
+  sl=vbuildstring(temps,200,string,arglist);
+  __builtin_va_end(arglist);
+
+  #if DISPLAYDEBUG==1
+    displayline(temps); //instead of sending the output to the serial port, output to the display
+  #else
+    if (sl>0)
+    {
+      for (i=0; i<sl; i++)
+        sendchar(temps[i]);
+    }
+  #endif
+}
+#endif
 
 void sendstringf(char *string UNUSED, ...)
 {
+#ifdef DELAYEDSERIAL
+  if (!useserial) return;
+#endif
+
+
 #ifdef DEBUG
   __builtin_va_list arglist;
   char temps[200];
@@ -914,21 +977,21 @@ void sendstringf(char *string UNUSED, ...)
   sl=vbuildstring(temps,200,string,arglist);
   __builtin_va_end(arglist);
 
-#if DISPLAYDEBUG==1
-  displayline(temps); //instead of sending the output to the serial port, output to the display
-#else
-  csEnter(&sendstringfCS);
-  csEnter(&sendstringCS);
+  #if DISPLAYDEBUG==1
+    displayline(temps); //instead of sending the output to the serial port, output to the display
+  #else
+    csEnter(&sendstringfCS);
+    csEnter(&sendstringCS);
 
-  if (sl>0)
-  {
-    for (i=0; i<sl; i++)
-      sendchar(temps[i]);
-  }
+    if (sl>0)
+    {
+      for (i=0; i<sl; i++)
+        sendchar(temps[i]);
+    }
 
-  csLeave(&sendstringCS);
-  csLeave(&sendstringfCS);
-#endif
+    csLeave(&sendstringCS);
+    csLeave(&sendstringfCS);
+  #endif
 #endif
 }
 
@@ -1023,13 +1086,14 @@ void mrewEndWrite(Pmultireadexclusivewritesychronizer MREW)
 }
 
 
-
 void csEnter(PcriticalSection CS)
 {
 #ifdef DEBUG
   if (CS->ignorelock)
     return;
+
 #endif
+
 
   int apicid=getAPICID()+1; //+1 so it never returns 0
 
@@ -1040,7 +1104,57 @@ void csEnter(PcriticalSection CS)
     return;
   }
 
+
+
+
+
+
+#ifdef DEBUG
+  //sendstringf_nolock("%d",getcpuinfo()->cpunr);
+  if (spinlock(&(CS->locked)))
+  {
+    while (1)
+    {
+      nosendchar[getAPICID()]=0;
+      if ((emergencyOutputOnly==FALSE) || (CS->debuglevel>emergencyOutputLevel)) //similar to a BSOD
+      {
+        emergencyOutputOnly=TRUE;
+        emergencyOutputAPICID=getAPICID();
+        emergencyOutputLevel=CS->debuglevel;
+      }
+
+      sendstringf_nolock("%d: spinlock timeout. CS Name=",getcpuinfo()->cpunr); //todo: more info
+      if (CS->name)
+        sendstringf_nolock(CS->name);
+
+      sendstringf_nolock("\n");
+
+      sendstringf_nolock("CS->apicid=%d CS->lockcount=%d\n", CS->apicid, CS->lockcount);
+
+      pcpuinfo c=firstcpuinfo;
+      while (c)
+      {
+        if ((int)(c->apicid)==(int)(CS->apicid-1))
+        {
+          sendstringf_nolock("Locked by cpunr %d\n", c->cpunr);
+          sendstringf_nolock("LastVMCall=%x\n", c->LastVMCall);
+          sendstringf_nolock("insideHandler=%d\n", c->insideHandler);
+
+          break;
+        }
+        c=c->next;
+      }
+
+
+
+
+
+    }
+
+  }
+#else
   spinlock(&(CS->locked)); //sets CS->locked to 1
+#endif
 
   asm volatile ("": : :"memory");
 
@@ -1057,11 +1171,15 @@ void csLeave(PcriticalSection CS)
 #endif
 
   int apicid=getAPICID()+1; //+1 so it never returns 0
+  int locked=CS->locked;
+  int ownerAPICID=CS->apicid;
 
 
   if ((CS->locked) && (CS->apicid==apicid))
   {
+    asm volatile ("": : :"memory");
     CS->lockcount--;
+    asm volatile ("": : :"memory");
     if (CS->lockcount==0)
     {
       //unlock
@@ -1074,8 +1192,32 @@ void csLeave(PcriticalSection CS)
   }
   else
   {
-    sendstringf("csLeave called for a non-locked or non-owned critical section\n");
-    while (1);
+#ifdef DEBUG
+    nosendchar[getAPICID()]=0;
+    sendstringf_nolock("csLeave called for a non-locked or non-owned critical section.  Name=%s\n", CS->name);
+#endif
+    ddDrawRectangle(0,DDVerticalResolution-100,100,100,0xff0000);
+    while (1)
+    {
+#ifdef DEBUG
+      if (CS->ignorelock)
+      {
+        outportb(0x80,0xc5); //todo: return
+      }
+#endif
+
+      outportb(0x80,0xc2);
+      if (locked)
+      {
+        outportb(0x80,0xc3);
+      }
+      if (ownerAPICID!=apicid)
+      {
+        outportb(0x80,0xc4);
+      }
+
+
+    }
   }
 }
 
@@ -1415,6 +1557,11 @@ int itoa(unsigned int value,int base, char *output,int maxsize)
 
 void sendchar(char c UNUSED)
 {
+#ifdef DELAYEDSERIAL
+  if (!useserial) return;
+#endif
+
+
 #if (defined SERIALPORT) && (SERIALPORT != 0)
 	unsigned char x;
 
@@ -1428,6 +1575,13 @@ void sendchar(char c UNUSED)
 
   if (nosendchar[getAPICID()])
     return;
+
+  if (emergencyOutputOnly)
+  {
+    if (getAPICID()!=emergencyOutputAPICID)
+      return;
+  }
+
 
   if (c=='\r') //to deal with an obsolete linefeed not needed anymore
     return;
@@ -1461,6 +1615,10 @@ void sendchar(char c UNUSED)
 
 int getchar(void)
 {
+#ifdef DELAYEDSERIAL
+  if (!useserial) return 0;
+#endif
+
 
 #if DISPLAYDEBUG==1
   return kbd_getchar();
@@ -1752,54 +1910,57 @@ void nextline(void)
   }
   else
     currentdisplayline++;
-#if DISPLAYDEBUG==1
-  linessincelastkey++;
-  if (linessincelastkey>=screenheight-1)
+//#if DISPLAYDEBUG==1
+  #if 0 //disabling this while testing uefi graphics boot (nokb)
   {
-    unsigned char c;
-    int done=0;
-    displayline("Press space to continue");
-    while (done==0)
+    linessincelastkey++;
+    if (linessincelastkey>=screenheight-1)
     {
-      c=kbd_getchar();
-
-      //displayline("(c=%x)", c);
-
-      switch (c)
+      unsigned char c;
+      int done=0;
+      displayline("Press space to continue");
+      while (done==0)
       {
-        case 3: //page up
-          if (displaydebuglog_back->last)
-            movelinesdown();
-          //not yet implemented
-          break;
+        c=kbd_getchar();
 
-        case 4: //page down
-          if (displaydebuglog_forward->last)
-            movelinesup();
-          break;
+        //displayline("(c=%x)", c);
 
-        case 1: //home
-          while (displaydebuglog_back->last)
-            movelinesdown();
-
-          break;
-
-        case 2: //end (or default)
-        case ' ':
+        switch (c)
         {
-          while (displaydebuglog_forward->last) //scroll to the end before continue
-            movelinesup();
+          case 3: //page up
+            if (displaydebuglog_back->last)
+              movelinesdown();
+            //not yet implemented
+            break;
 
-          done=1;
+          case 4: //page down
+            if (displaydebuglog_forward->last)
+              movelinesup();
+            break;
+
+          case 1: //home
+            while (displaydebuglog_back->last)
+              movelinesdown();
+
+            break;
+
+          case 2: //end (or default)
+          case ' ':
+          {
+            while (displaydebuglog_forward->last) //scroll to the end before continue
+              movelinesup();
+
+            done=1;
+          }
+
         }
-
       }
-    }
 
-    currentdisplayrow=0;
-    displayline("                         ");
-    currentdisplayrow=0;
-    linessincelastkey=0;
+      currentdisplayrow=0;
+      displayline("                         ");
+      currentdisplayrow=0;
+      linessincelastkey=0;
+    }
   }
 #endif
 }

@@ -8,8 +8,15 @@ unit LuaPipeClient;
 
 interface
 
+
 uses
-  windows, Classes, SysUtils, LuaPipe, lua, luaclass;
+  {$ifdef windows}
+  windows,
+  {$endif}
+  {$ifdef darwin}
+  macport, macpipe,
+  {$endif}
+  Classes, SysUtils, LuaPipe, lua, LuaClass;
 
 procedure initializeLuaPipeClient;
 
@@ -20,24 +27,40 @@ type
     constructor create(pipename: string; timeout: integer=0);
   end;
 
+
 implementation
 
 uses LuaHandler;
-
-
 
 constructor TLuaPipeClient.create(pipename: string; timeout: integer=0);
 begin
   inherited create;
 
   ftimeout:=timeout;
-  fOverLapped:=timeout>0;
+  fOverLapped:=true; //timeout>0;
 
+  pipe:=INVALID_HANDLE_VALUE;
+  {$ifdef windows}
   if foverlapped then
     pipe:=CreateFile(pchar('\\.\pipe\'+pipename), GENERIC_READ or GENERIC_WRITE, FILE_SHARE_READ or FILE_SHARE_WRITE, nil, OPEN_EXISTING,  FILE_FLAG_OVERLAPPED, 0)
   else
     pipe:=CreateFile(pchar('\\.\pipe\'+pipename), GENERIC_READ or GENERIC_WRITE, FILE_SHARE_READ or FILE_SHARE_WRITE, nil, OPEN_EXISTING,  0, 0);
-  fConnected:=pipe<>INVALID_HANDLE_VALUE;
+  {$endif}
+
+  {$ifdef darwin}
+  pipe:=connectNamedPipe(pipename, timeout);
+  outputdebugstring('pipe='+inttohex(THANDLE(pipe),1));
+  outputdebugstring('INVALID_HANDLE_VALUE='+inttohex(THANDLE(INVALID_HANDLE_VALUE),1));
+  {$endif}
+
+
+  fConnected:=THANDLE(pipe)<>THANDLE(INVALID_HANDLE_VALUE);
+
+  if fConnected then
+    outputdebugstring('pipe is valid')
+  else
+    outputdebugstring('pipe is invalid');
+
 end;
 
 function luapipeclient_connectToPipe(L: PLua_state): integer; cdecl;
@@ -51,6 +74,8 @@ begin
   begin
     pipename:=lua_tostring(L, 1);
 
+    if pipename='' then exit(0);
+
     if lua_gettop(L)>=2 then
       timeout:=lua_tointeger(L,2)
     else
@@ -59,13 +84,18 @@ begin
     p:=TLuaPipeClient.create(pipename,timeout);
     if p.connected then
     begin
+      outputdebugstring('Returning pipe object');
       luaclass_newClass(L, p);
       result:=1;
     end
     else
+    begin
       p.free;
+      outputdebugstring('Returning nil');
+    end;
   end;
 end;
+
 
 procedure initializeLuaPipeClient;
 begin

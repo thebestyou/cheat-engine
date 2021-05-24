@@ -1,7 +1,7 @@
 object About: TAbout
-  Left = 918
+  Left = 919
   Height = 310
-  Top = 315
+  Top = 316
   Width = 488
   HelpContext = 2
   AutoSize = True
@@ -13,7 +13,7 @@ object About: TAbout
   OnClose = FormClose
   OnShow = FormShow
   Position = poScreenCenter
-  LCLVersion = '2.0.0.4'
+  LCLVersion = '2.0.6.0'
   object GroupBox1: TGroupBox
     Left = 0
     Height = 310
@@ -26,14 +26,14 @@ object About: TAbout
     ClientWidth = 484
     TabOrder = 0
     object Label2: TLabel
-      AnchorSideTop.Control = Label10
+      AnchorSideTop.Control = Label6
       AnchorSideTop.Side = asrBottom
       Left = 5
       Height = 15
-      Top = 128
+      Top = 143
       Width = 92
       BorderSpacing.Left = 5
-      BorderSpacing.Top = 15
+      BorderSpacing.Top = 9
       Caption = 'Special thanks to:'
       ParentColor = False
     end
@@ -43,7 +43,7 @@ object About: TAbout
       AnchorSideTop.Side = asrBottom
       Left = 5
       Height = 15
-      Top = 212
+      Top = 227
       Width = 231
       BorderSpacing.Left = 5
       BorderSpacing.Top = 10
@@ -395,7 +395,7 @@ object About: TAbout
       AnchorSideBottom.Side = asrBottom
       Left = 5
       Height = 15
-      Top = 232
+      Top = 247
       Width = 436
       Anchors = [akTop, akLeft, akRight]
       BorderSpacing.Left = 5
@@ -494,8 +494,8 @@ object About: TAbout
       AnchorSideTop.Side = asrBottom
       Left = 5
       Height = 57
-      Top = 145
-      Width = 357
+      Top = 160
+      Width = 356
       AutoSize = True
       BorderSpacing.Left = 5
       BorderSpacing.Top = 2
@@ -507,7 +507,7 @@ object About: TAbout
       ChildSizing.Layout = cclLeftToRightThenTopToBottom
       ChildSizing.ControlsPerLine = 5
       ClientHeight = 57
-      ClientWidth = 357
+      ClientWidth = 356
       TabOrder = 2
       object Label21: TLabel
         Left = 2
@@ -537,12 +537,12 @@ object About: TAbout
         Left = 224
         Height = 15
         Top = 2
-        Width = 69
+        Width = 68
         Caption = 'SWAT-Squad'
         ParentColor = False
       end
       object Label25: TLabel
-        Left = 302
+        Left = 301
         Height = 15
         Top = 2
         Width = 53
@@ -577,12 +577,12 @@ object About: TAbout
         Left = 224
         Height = 15
         Top = 21
-        Width = 69
+        Width = 68
         Caption = 'Emperor'
         ParentColor = False
       end
       object Label30: TLabel
-        Left = 302
+        Left = 301
         Height = 15
         Top = 21
         Width = 53
@@ -617,12 +617,12 @@ object About: TAbout
         Left = 224
         Height = 15
         Top = 40
-        Width = 69
+        Width = 68
         Caption = 'Atom0s'
         ParentColor = False
       end
       object Label3: TLabel
-        Left = 302
+        Left = 301
         Height = 15
         Top = 40
         Width = 53
@@ -686,6 +686,18 @@ object About: TAbout
       Top = 0
       Width = 102
       Caption = 'Made by: Dark Byte'
+      ParentColor = False
+    end
+    object Label6: TLabel
+      AnchorSideLeft.Control = Label10
+      AnchorSideTop.Control = Label10
+      AnchorSideTop.Side = asrBottom
+      Left = 5
+      Height = 15
+      Top = 119
+      Width = 166
+      BorderSpacing.Top = 6
+      Caption = 'C Compiler by Tiny C-Compiler'
       ParentColor = False
     end
   end

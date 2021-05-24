@@ -5,8 +5,14 @@ unit formhotkeyunit;
 interface
 
 uses
-  windows, LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
-  Dialogs, StdCtrls, LResources, ExtCtrls;
+  {$ifdef darwin}
+  macport,
+  {$endif}
+  {$ifdef windows}
+  windows,
+  {$endif}
+  LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
+  Dialogs, StdCtrls, LResources, ExtCtrls, LCLType, betterControls;
 
 type
 
@@ -91,8 +97,8 @@ begin
   case key of
     VK_OEM_PLUS : newstr:='=';
     VK_OEM_MINUS : newstr:='-';
-    VK_OEM_PERIOD : newstr:=',';
-    VK_OEM_COMMA : newstr:='.';
+    VK_OEM_PERIOD : newstr:='.';
+    VK_OEM_COMMA : newstr:=',';
     VK_OEM_1 : newstr:=';';
     VK_OEM_2 : newstr:='/';
     VK_OEM_3 : newstr:='`';

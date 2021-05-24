@@ -3,9 +3,18 @@
 
 #include <stddef.h>
 
+
+//#define DELAYEDSERIAL
+
+#define AMDNP  //enable AMD nested paging support
+
+#ifdef DELAYEDSERIAL
+extern int useserial;
+#endif
+
 #define STATISTICS
 
-#define TSCHOOK
+//#define TSCHOOK
 
 #define MAX_STACK_SIZE 0x10000
 
@@ -20,6 +29,8 @@
   #define DEBUGINTHANDLER
   #define CHECKAPICID
 #endif
+
+
 
 #define ULTIMAPDEBUG //for debugging ultimap (I seem to have misplaced my serial port...)
 
@@ -82,6 +93,8 @@ typedef volatile struct _criticalSection
   volatile int locked;
   volatile int apicid;
   int lockcount;
+  char *name;
+  int debuglevel;
 #ifdef DEBUG
   int ignorelock;
 #endif
@@ -135,9 +148,9 @@ typedef union
     unsigned VIF    :1; // 19
     unsigned VIP    :1; // 20
     unsigned ID     :1; // 21
-    unsigned reserved5  :32; // 22-63
-    unsigned reserved6  :10; // 22-63
-  };
+    unsigned reserved5  :11; // 22-63
+    unsigned reserved6  :32; // 22-63
+  }__attribute__((__packed__));
 } __attribute__((__packed__)) RFLAGS,*PRFLAGS;
 
 
@@ -200,8 +213,8 @@ int isxdigit(int c);
 
 
 
-int minq(QWORD x,QWORD y);
-int maxq(QWORD x,QWORD y);
+QWORD minq(QWORD x,QWORD y);
+QWORD maxq(QWORD x,QWORD y);
 int min(int x,int y);
 int max(int x,int y);
 
@@ -220,6 +233,9 @@ int strcoll(const char *s1, const char *s2);
 //#ifdef DEBUG
   void sendstring(char *s);
   void sendstringf(char *string, ...);
+#ifdef DEBUG
+  void sendstringf_nolock(char *string UNUSED, ...); //debug only
+#endif
 
   int sprintf(char *str, const char *format, ...);
   int snprintf(char *str, size_t size, const char *format, ...);
@@ -284,6 +300,9 @@ void sendDissectedFlags(PRFLAGS rflags);
 void csEnter(PcriticalSection CS);
 void csLeave(PcriticalSection CS);
 
+#ifdef DEBUG
+extern QWORD spinlocktimeout;
+#endif
 int spinlock(volatile int *CS); //returns 0
 
 void lockedQwordIncrement(volatile QWORD *address, QWORD inccount);
@@ -299,6 +318,12 @@ typedef struct textvideo {
 typedef TEXTVIDEO TEXTVIDEOLINE[80];
 
 unsigned char nosendchar[256];
+
+int emergencyOutputOnly;
+int emergencyOutputLevel;
+unsigned char emergencyOutputAPICID;
+
+
 
 int currentdisplayline;
 int currentdisplayrow;
@@ -381,7 +406,7 @@ typedef volatile struct _PTE_PAE
         unsigned A1        :  1; // available 1 aka copy-on-write
         unsigned A2        :  1; // available 2/ is 1 when paged to disk
         unsigned A3        :  1; // available 3
-        unsigned PFN       : 24; // page-frame number
+        unsigned PFN       : 28; // page-frame number
         unsigned reserved  : 23;
         unsigned EXB       :  1;
 } __attribute__((__packed__)) _PTE_PAE, *PPTE_PAE;
@@ -403,7 +428,7 @@ typedef volatile struct _PDE_PAE
         unsigned PFN       : 28; // page-frame number
         unsigned reserved4 : 23;
         unsigned EXB       :  1;
-} __attribute__((__packed__)) *PPDE_PAE;
+} __attribute__((__packed__)) _PDE_PAE, *PPDE_PAE;
 
 typedef volatile struct _PDE2MB_PAE
 {
@@ -425,7 +450,6 @@ typedef volatile struct _PDE2MB_PAE
         unsigned EXB       :  1;
 } __attribute__((__packed__)) _PDE2MB_PAE, *PPDE2MB_PAE;
 
-
 typedef volatile struct _PDPTE_PAE
 {
         unsigned P         :  1; // 0: present (1 = present)
@@ -441,6 +465,40 @@ typedef volatile struct _PDPTE_PAE
         unsigned reserved3 : 23;
         unsigned EXB       :  1;
 } __attribute__((__packed__)) *PPDPTE_PAE;
+
+typedef struct _PPDPTE_PAE_BS
+{
+        unsigned P         :  1; // present (1 = present)
+        unsigned RW        :  1; // Read Write
+        unsigned US        :  1; // User supervisor
+        unsigned PWT       :  1; // page-level write-through
+        unsigned PCD       :  1; // page-level cache disabled
+        unsigned A         :  1;
+        unsigned D         :  1;
+        unsigned PS        :  1;
+        unsigned G         :  1;
+        unsigned A1        :  1; // available 1 aka copy-on-write
+        unsigned A2        :  1; // available 2/ is 1 when paged to disk
+        unsigned A3        :  1; // available 3
+        unsigned PFN       : 24; // page-frame number
+        unsigned reserved3 : 28;
+} __attribute__((__packed__)) _PDPTE_PAE_BS, *PPDPTE_PAE_BS;
+
+typedef volatile struct _PPML4
+{
+        unsigned P         :  1; // 0: present (1 = present)
+        unsigned RW        :  1; // 1: Read Write
+        unsigned US        :  1; // 2: User supervisor
+        unsigned PWT       :  1; // 3: page-level write-through
+        unsigned PCD       :  1; // 4: page-level cache disabled
+        unsigned reserved2 :  4; // 5-8: reserved
+        unsigned A1        :  1; // 9: available 1 aka copy-on-write
+        unsigned A2        :  1; // 10: available 2/ is 1 when paged to disk
+        unsigned A3        :  1; // 11: available 3
+        unsigned PFN       : 28; // page-frame number
+        unsigned reserved3 : 23;
+        unsigned EXB       :  1;
+} __attribute__((__packed__)) *PPML4;
 
 
 typedef struct _TSS

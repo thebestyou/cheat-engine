@@ -66,12 +66,18 @@ end;   }
 
 interface
 
+{$ifdef darwin}
+uses macport, LCLIntf,classes,sysutils,syncobjs, CEFuncProc, CustomTypeHandler, commonTypeDefs;
+{$endif}
+
 {$ifdef windows}
 uses windows, LCLIntf,classes,sysutils,syncobjs, CEFuncProc, CustomTypeHandler, commonTypeDefs;
 
 {$define customtypeimplemented}
 
-{$else}
+{$endif}
+
+{$ifdef jni}
 uses Classes,sysutils,syncobjs,unixporthelper, CustomTypeHandler, commonTypeDefs;
 
 {$endif}
@@ -80,7 +86,12 @@ type TSavedScantype= (fs_advanced,fs_addresslist);
 //type TValueType= (vt_byte,vt_word, vt_dword, vt_single, vt_double, vt_int64, vt_all);     //todo: Make compatible with the rest of ce's vartype
 
 
-type TSavedScanHandler = class
+type
+
+  ESavedScanException = class(Exception);   //debugger can ignore this
+  ESavedScanExceptionBad = class(Exception);
+
+  TSavedScanHandler = class
   private
     SavedScanmemoryFS: TFileStream;
     SavedScanaddressFS: TFileStream;
@@ -107,6 +118,7 @@ type TSavedScanHandler = class
     end;
 
     currentRegion: integer;
+    currentSubRegion: QWORD; //offset into the current region (governed by buffersize)
     Deinitialized: boolean; //if set do not lookup pointers
     procedure cleanup;
     function loadIfNotLoadedRegion(p: pointer): pointer;
@@ -184,12 +196,13 @@ end;
 
 procedure TSavedScanHandler.loadCurrentRegionMemory;
 {Loads the memory region designated by the current region}
-var pm: ^TArrMemoryRegion;
+var
+  pm: ^TArrMemoryRegion;
 begin
   pm:=addresslistmemory;
-  SavedScanmemoryfs.position:=ptruint(pm[currentRegion].startaddress);
 
-  savedscanmemoryfs.readbuffer(SavedScanmemory^, pm[currentRegion].memorysize);
+  SavedScanmemoryfs.position:=ptruint(pm^[currentRegion].startaddress)+currentSubRegion;
+  savedscanmemoryfs.readbuffer(SavedScanmemory^, integer(min(qword(buffersize+64), qword(pm^[currentRegion].memorysize-currentSubRegion))));
 
 end;
 
@@ -277,7 +290,7 @@ begin
 
   if currentaddresslistcount=0 then
   begin
-    raise exception.create(rsMaxaddresslistcountIs0MeansTheAddresslistIsBad+' (savedscanaddressfs.size='+inttostr(savedscanaddressfs.size)+')');
+    raise ESavedScanException.create(rsMaxaddresslistcountIs0MeansTheAddresslistIsBad+' (savedscanaddressfs.size='+inttostr(savedscanaddressfs.size)+')');
   end;
 
   LastAddressAccessed.index:=0; //reset the index
@@ -328,21 +341,26 @@ begin
     pm:=addresslistmemory;
 
     if AllowRandomAccess and (currentregion>=0) and (address<pm[currentregion].baseaddress) then //out of order access. Start from scratch
+    begin
       currentRegion:=-1;
+      currentSubRegion:=0;
+    end;
 
 
     //if no region is set or the current region does not fall in the current list
-    if (currentRegion=-1) or (address>pm[currentregion].baseaddress+pm[currentregion].memorysize) then
+    if (currentRegion=-1) or (address>pm^[currentregion].baseaddress+pm^[currentregion].memorysize) or (address>pm^[currentregion].baseaddress+currentSubRegion+buffersize) then
     begin
-      //find the startregion, becaue it's a sequential read just go through it in order
-      inc(currentRegion);
-      while (address>pm[currentregion].baseaddress+pm[currentregion].memorysize) and (currentregion<maxnumberofregions) do
+      //find the startregion, because it's a sequential read just go through it in order
+      if (currentRegion=-1) or (address>pm^[currentregion].baseaddress+pm^[currentregion].memorysize) then
+        inc(currentRegion);
+
+      while (address>pm[currentregion].baseaddress+pm^[currentregion].memorysize) and (currentregion<maxnumberofregions) do
         inc(currentRegion);
 
       if currentregion>=maxnumberofregions then
       begin
         if AllowNotFound = false then
-          raise exception.create(Format(rsFailureInFindingInThePreviousScanResults, [inttohex(address, 8)]))
+          raise ESavedScanException.create(Format(rsFailureInFindingInThePreviousScanResults, [inttohex(address, 8)]))
         else
         begin
           lastFail:=2;
@@ -350,13 +368,15 @@ begin
         end;
       end;
 
+      currentSubRegion:=address-pm^[currentregion].baseaddress; //read from the requested address if a subregion  (skips stuff we don't need)
+
       loadCurrentRegionMemory;
     end;
 
 
 
 
-    result:=pointer(ptruint(savedscanmemory)+(address-pm[currentregion].baseaddress));
+    result:=pointer(ptruint(savedscanmemory)+(address-(pm^[currentregion].baseaddress+currentSubRegion)));
     exit;
 
   end
@@ -445,7 +465,7 @@ begin
           exit(getpointertoaddress(address, valuetype, ct, false));
         end
         else
-          raise exception.create(rsInvalidOrderOfCallingGetpointertoaddress);
+          raise ESavedScanException.create(rsInvalidOrderOfCallingGetpointertoaddress);
       end;
 
       if pa[currentaddresslistcount-1]<address then
@@ -469,7 +489,7 @@ begin
                 exit(getpointertoaddress(address, valuetype, ct, false));
               end
               else
-                raise exception.create(e.message);
+                raise ESavedScanException.create(e.message);
             end;
           end;
         end;
@@ -525,7 +545,7 @@ begin
 
       //not found
       if not AllowNotFound then
-        raise exception.create(Format(rsFailureInFindingInTheFirstScanResults, [inttohex(address, 8)]));
+        raise ESavedScanException.create(Format(rsFailureInFindingInTheFirstScanResults, [inttohex(address, 8)]));
     end
     else
     begin
@@ -546,7 +566,7 @@ begin
           exit(getpointertoaddress(address, valuetype, ct, false));
         end
         else
-          raise exception.create(rsInvalidOrderOfCallingGetpointertoaddress);
+          raise ESavedScanExceptionBad.create(rsInvalidOrderOfCallingGetpointertoaddress);
       end;
 
       if pab[currentaddresslistcount-1].address<address then
@@ -569,7 +589,7 @@ begin
               exit(getpointertoaddress(address, valuetype, ct, false));
             end
             else
-              raise exception.create(e.message);
+              raise ESavedScanExceptionBad.create(e.message);
           end;
         end;
 
@@ -618,7 +638,7 @@ begin
   end;
 
   if not AllowNotFound then
-    raise exception.create(Format(rsFailureInFindingInThePreviousScanResults, [inttohex(address, 8)]));
+    raise ESavedScanExceptionBad.create(Format(rsFailureInFindingInThePreviousScanResults, [inttohex(address, 8)]));
 
 end;
 
@@ -640,7 +660,7 @@ begin
     try
       SavedScanaddressFS:=tfilestream.Create(scandir+'ADDRESSES.'+savedresultsname, fmopenread or fmsharedenynone);
     except
-      raise exception.Create(rsNoFirstScanDataFilesFound);
+      raise ESavedScanException.Create(rsNoFirstScanDataFilesFound);
     end;
     SavedScanaddressFS.ReadBuffer(datatype,7);
 
@@ -654,19 +674,20 @@ begin
       SavedScanaddressFS.ReadBuffer(addresslistmemory^, (SavedScanaddressFS.Size-7));
 
 
-      //find the max region
+      //find the max region and split up into bitesize chunks
       pm:=addresslistmemory;
 
       p:=0;
       for i:=0 to maxnumberofregions-1 do
       begin
-        maxregionsize:=max(maxregionsize, integer(pm[i].memorysize));
+        maxregionsize:=max(maxregionsize, integer(min(qword(buffersize+64+MaxCustomTypeSize), qword(pm^[i].memorysize))));
         pm[i].startaddress:=pointer(p); //set the offset in the file (if it wasn't set already)
         inc(p, pm[i].MemorySize);
       end;
 
 
       currentRegion:=-1;
+      currentSubRegion:=0;
     end
     else
     begin
@@ -681,9 +702,9 @@ begin
 
     try
       SavedScanmemoryFS:=Tfilestream.Create(scandir+'MEMORY.'+savedresultsname,fmOpenRead or fmsharedenynone);
-      getmem(SavedScanmemory, maxregionsize);
+      getmem(SavedScanmemory, maxregionsize+512); //extra just to be safe for custom types that misreport size
     except
-      raise exception.Create(rsNoFirstScanDataFilesFound);
+      raise ESavedScanException.Create(rsNoFirstScanDataFilesFound);
     end;
 
     deinitialized:=false;
@@ -694,7 +715,7 @@ begin
       //clean up and raise the exception
       log('Error during TSavedScanHandler.InitializeScanHandler:'+e.Message);
       cleanup;
-      raise exception.Create(e.Message);
+      raise ESavedScanException.Create(e.Message);
     end;
  end;
 end;

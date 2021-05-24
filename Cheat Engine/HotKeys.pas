@@ -5,20 +5,26 @@ unit HotKeys;
 interface
 
 uses
-  windows, LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
+  {$ifdef darwin}
+  macport, LCLType, math, machotkeys,
+  {$endif}
+  {$ifdef windows}
+  windows,
+  {$endif}
+  LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
   Dialogs, StdCtrls, Buttons, registry, CEFuncProc, ExtCtrls, LResources,
-  comCtrls, menus, hotkeyhandler, MemoryRecordUnit, commonTypeDefs, strutils;
+  comCtrls, menus, hotkeyhandler, MemoryRecordUnit, commonTypeDefs, strutils, betterControls;
 
 type
 
   { THotKeyForm }
 
   THotKeyForm = class(TForm)
-    BitBtn1: TBitBtn;
     btnApply: TButton;
     btnCreateHotkey: TButton;
     btnEditHotkey: TButton;
     btnCancel: TButton;
+    btnOK: TButton;
     Button2: TButton;
     cbActivateSound: TComboBox;
     cbDeactivateSound: TComboBox;
@@ -50,11 +56,11 @@ type
     sbPlayDeactivate: TSpeedButton;
     TabSheet1: TTabSheet;
     TabSheet2: TTabSheet;
-    procedure BitBtn1Click(Sender: TObject);
     procedure btnCreateHotkeyClick(Sender: TObject);
     procedure btnEditHotkeyClick(Sender: TObject);
     procedure btnApplyClick(Sender: TObject);
     procedure btnCancelClick(Sender: TObject);
+    procedure btnOKClick(Sender: TObject);
     procedure Button2Click(Sender: TObject);
     procedure cbActivateSoundChange(Sender: TObject);
     procedure cbDeactivateSoundChange(Sender: TObject);
@@ -86,16 +92,18 @@ type
     procedure SetMemrec(x: TMemoryRecord);
     function HotkeyActionToText(a: TMemrecHotkeyAction): string;
     function getHotkeyAction: TMemrecHotkeyAction;
+    function getBtnOKCustomButton: TCustomButton;
   public
     { Public declarations }
-
+  published
     property memrec: TMemoryRecord read fmemrec write SetMemrec;
+    property BitBtn1: TCustomButton read getBtnOKCustomButton; //compatibility with older versions
   end;
 
 
 implementation
 
-uses MainUnit, trainergenerator, luafile, LuaHandler, DPIHelper;
+uses MainUnit, {$ifdef windows}trainergenerator,{$endif} luafile, LuaHandler, DPIHelper;
 
 resourcestring
   rsHotkeyID = 'Hotkey ID=%s';
@@ -117,7 +125,10 @@ resourcestring
   rsDefaultDeactivated = '%s Deactivated';
 
 
-
+function THotkeyform.getBtnOKCustomButton: TCustomButton;
+begin
+  result:=btnOK as TCustomButton;
+end;
 
 function THotkeyform.getHotkeyAction: TMemrecHotkeyAction;
 begin
@@ -261,13 +272,6 @@ begin
   cbDeactivateSoundChange(cbDeactivateSound);
 end;
 
-procedure THotKeyForm.BitBtn1Click(Sender: TObject);
-begin
-  if edithotkey then
-    btnApply.click;
-
-  close;
-end;
 
 procedure THotKeyForm.btnEditHotkeyClick(Sender: TObject);
 var
@@ -339,9 +343,12 @@ begin
     hk.action:=getHotkeyAction;
     hk.value:=edtFreezeValue.text;
     hk.fdescription:=edtDescription.text;
+    hk.registerkeys;
   end
   else
     hk:=memrec.Addhotkey(keys, getHotkeyAction, edtFreezeValue.text, edtDescription.text );
+
+
 
   if cbActivateSound.ItemIndex=cbActivateSound.items.count-1 then
   begin
@@ -394,6 +401,14 @@ begin
 
   pagecontrol1.ActivePage:=tabsheet1;
   listview1.Enabled:=true;
+end;
+
+procedure THotKeyForm.btnOKClick(Sender: TObject);
+begin
+  if edithotkey then
+    btnApply.click;
+
+  close;
 end;
 
 procedure THotKeyForm.Button2Click(Sender: TObject);
@@ -454,10 +469,43 @@ begin
   cbFreezedirectionSelect(cbFreezedirection);
 end;
 
+function isModifier(k: word): boolean;
+begin
+  result:=false;
+  case k of
+    vk_lwin, vk_rwin, vk_shift,vk_lshift,
+    vk_rshift, VK_CAPITAL, VK_MENU, vk_LMENU,
+    vk_RMENU, VK_CONTROL, VK_LCONTROL, VK_RCONTROL:
+      result:=true;
+
+  end;
+end;
+
 procedure THotKeyForm.edtHotkeyKeyDown(Sender: TObject; var Key: Word;
   Shift: TShiftState);
-var i: integer;
+var
+  i: integer;
 begin
+  {$ifdef darwin}
+
+  if not isModifier(key) then
+  begin
+    //there can be only one non-modifier
+    for i:=0 to 4 do
+    begin
+      if keys[i]=0 then break;
+
+      if not isModifier(keys[i]) then
+      begin
+        key:=0; //do not add
+        break;
+      end;
+    end;
+  end;
+  {$endif}
+
+
+
   if keys[4]=0 then
   begin
     for i:=0 to 4 do
@@ -498,7 +546,20 @@ end;
 
 
 procedure THotKeyForm.FormCreate(Sender: TObject);
+var lblLimiteHotkeySupport: tlabel;
 begin
+  {$ifdef darwin}
+  if loadMacHotkeyFunctions=false then
+  begin
+    lblLimiteHotkeySupport:=tlabel.create(self);
+    lblLimiteHotkeySupport.caption:='Limited hotkey support. No character keys supported';
+    lblLimiteHotkeySupport.font.color:=clRed;
+    lblLimiteHotkeySupport.align:=alBottom;
+    lblLimiteHotkeySupport.parent:=self;
+   end;
+  {$endif}
+
+
   edtActivateText.Hint:=rsTextToSpeechHint; //make it easier for translators
   edtDeactivateText.Hint:=edtActivateText.Hint;
 
@@ -534,18 +595,28 @@ begin
   cbActivateSound.Items.add('');
   cbDeactivateSound.Items.add('');
 
+  {$ifdef windows}
   FillSoundList(cbActivateSound.Items);
   FillSoundList(cbDeactivateSound.Items);
 
+
   cbActivateSound.Items.Add(rsSpeakText);
   cbDeactivateSound.Items.Add(rsSpeakText);
+  {$else}
+  cbActivateSound.Enabled:=false;
+  cbDeactivateSound.Enabled:=false;
+  sbPlayActivate.enabled:=false;
+  sbPlayDeactivate.enabled:=false;
+  {$endif}
 end;
 
 procedure THotKeyForm.FormShow(Sender: TObject);
 var
   i, maxwidth: integer;
   s: string;
+  {$ifdef windows}
   cbi: TComboboxInfo;
+  {$endif}
 begin
   PageControl1.PageIndex:=1;
 
@@ -566,6 +637,7 @@ begin
     maxwidth:=max(maxwidth, Canvas.TextWidth(s));
   end;
 
+  {$ifdef windows}
   cbi.cbSize:=sizeof(cbi);
   if GetComboBoxInfo(cbFreezedirection.Handle, @cbi) then
   begin
@@ -574,6 +646,7 @@ begin
     cbFreezedirection.width:=cbFreezedirection.width+i;
   end
   else
+  {$endif}
     cbFreezedirection.width:=maxwidth+16;
 
   maxwidth:=0;
@@ -586,6 +659,7 @@ begin
   maxwidth:=max(maxwidth, canvas.TextWidth(edtActivateText.Text));
 
 
+  {$ifdef windows}
   cbi.cbSize:=sizeof(cbi);
   if GetComboBoxInfo(cbActivateSound.Handle, @cbi) then
   begin
@@ -594,6 +668,7 @@ begin
     cbActivateSound.width:=cbActivateSound.width+i;
   end
   else
+  {$endif}
     cbActivateSound.width:=maxwidth+16;
 
   if cbFreezedirection.width>edtHotkey.Width then
@@ -671,8 +746,10 @@ begin
     oldactivate:=cbActivateSound.text;
     olddeactivate:=cbDeactivateSound.Text;
 
+    {$ifdef windows}
     FillSoundList(cbActivateSound.Items);
     FillSoundList(cbDeactivateSound.Items);
+    {$endif}
 
     cbActivateSound.Items.Add(rsSpeakText);
     cbDeactivateSound.Items.Add(rsSpeakText);
@@ -696,7 +773,7 @@ end;
 
 procedure THotKeyForm.Panel2Resize(Sender: TObject);
 begin
-  bitbtn1.left:=(panel2.clientwidth div 2) - (bitbtn1.width div 2);
+
 end;
 
 procedure THotKeyForm.pmHotkeylistPopup(Sender: TObject);

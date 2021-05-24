@@ -7,8 +7,14 @@ unit formDifferentBitSizeUnit;
 interface
 
 uses
-  Windows, LCLIntf, SysUtils, Classes, Graphics, Controls, Forms,
-  Dialogs, StdCtrls,CEFuncProc, Menus, LResources;
+  {$ifdef darwin}
+  macport, LCLType,
+  {$endif}
+  {$ifdef windows}
+  Windows,
+  {$endif}
+  LCLIntf, SysUtils, Classes, Graphics, Controls, Forms,
+  Dialogs, StdCtrls,CEFuncProc, Menus, LResources, betterControls;
 
 type
   TformDifferentBitSize = class(TForm)

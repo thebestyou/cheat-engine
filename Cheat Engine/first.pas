@@ -4,11 +4,14 @@ unit first;
 
 interface
 
+{$ifdef windows}
 uses
   betterDLLSearchPath, Classes, SysUtils;
+{$endif}
 
 implementation
 
+{$ifdef windows}
 uses windows, registry, Win32Int;
 
 
@@ -51,13 +54,13 @@ end;
 
 var
   i: integer;
-  istrainer: boolean;
+  //istrainer: boolean;
   r: TRegistry;
   hassetdpiaware: boolean;
 initialization
   //todo, check registry if not a trainer
 
-  istrainer:=false;
+  //istrainer:=false;
   hassetdpiaware:=false;
 
   for i:=1 to Paramcount do
@@ -68,11 +71,11 @@ initialization
       hassetdpiaware:=true;
     end;
 
-    if pos('.CETRAINER', uppercase(ParamStr(i)))>0 then
-      istrainer:=true;
+    //if pos('.CETRAINER', uppercase(ParamStr(i)))>0 then
+    //  istrainer:=true;
   end;
 
-  if not (istrainer or hassetdpiaware) then
+  if not hassetdpiaware then
   begin
     //check the registry
     r := TRegistry.Create;
@@ -96,6 +99,9 @@ initialization
     r.free;
     r:=nil;
   end;
+{$endif}
+
+
 
 
 end.

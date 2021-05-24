@@ -1,25 +1,26 @@
 object frmSymbolhandler: TfrmSymbolhandler
   Left = 422
-  Height = 253
+  Height = 432
   Top = 156
-  Width = 468
+  Width = 497
   Caption = 'Symbol config'
-  ClientHeight = 253
-  ClientWidth = 468
+  ClientHeight = 432
+  ClientWidth = 497
   OnCreate = FormCreate
+  OnDestroy = FormDestroy
   OnShow = FormShow
   Position = poScreenCenter
-  LCLVersion = '2.0.0.4'
+  LCLVersion = '2.0.6.0'
   object Panel1: TPanel
-    Left = 303
-    Height = 253
+    Left = 371
+    Height = 432
     Top = 0
-    Width = 165
+    Width = 126
     Align = alRight
     AutoSize = True
     BevelOuter = bvNone
-    ClientHeight = 253
-    ClientWidth = 165
+    ClientHeight = 432
+    ClientWidth = 126
     Constraints.MinHeight = 250
     TabOrder = 0
     object Label2: TLabel
@@ -31,7 +32,7 @@ object frmSymbolhandler: TfrmSymbolhandler
       Left = 8
       Height = 15
       Top = 58
-      Width = 149
+      Width = 110
       Alignment = taCenter
       Anchors = [akTop, akLeft, akRight]
       BorderSpacing.Left = 8
@@ -44,10 +45,13 @@ object frmSymbolhandler: TfrmSymbolhandler
       AnchorSideLeft.Control = Panel1
       AnchorSideTop.Control = Label2
       AnchorSideTop.Side = asrBottom
+      AnchorSideRight.Control = Panel1
+      AnchorSideRight.Side = asrBottom
       Left = 8
       Height = 23
       Top = 73
-      Width = 149
+      Width = 110
+      Anchors = [akTop, akLeft, akRight]
       BorderSpacing.Left = 8
       BorderSpacing.Right = 8
       TabOrder = 1
@@ -57,7 +61,7 @@ object frmSymbolhandler: TfrmSymbolhandler
       AnchorSideLeft.Side = asrCenter
       AnchorSideTop.Control = edtAddress
       AnchorSideTop.Side = asrBottom
-      Left = 37
+      Left = 18
       Height = 25
       Top = 104
       Width = 90
@@ -84,7 +88,7 @@ object frmSymbolhandler: TfrmSymbolhandler
       Left = 8
       Height = 15
       Top = 16
-      Width = 149
+      Width = 110
       Alignment = taCenter
       Anchors = [akTop, akLeft, akRight]
       BorderSpacing.Left = 8
@@ -102,7 +106,7 @@ object frmSymbolhandler: TfrmSymbolhandler
       Left = 8
       Height = 23
       Top = 31
-      Width = 149
+      Width = 110
       Anchors = [akTop, akLeft, akRight]
       BorderSpacing.Left = 8
       BorderSpacing.Right = 8
@@ -112,19 +116,19 @@ object frmSymbolhandler: TfrmSymbolhandler
   end
   object Panel2: TPanel
     Left = 0
-    Height = 253
+    Height = 432
     Top = 0
-    Width = 303
+    Width = 371
     Align = alClient
     BevelOuter = bvNone
-    ClientHeight = 253
-    ClientWidth = 303
+    ClientHeight = 432
+    ClientWidth = 371
     TabOrder = 1
     object Label1: TLabel
       Left = 0
       Height = 15
       Top = 0
-      Width = 303
+      Width = 371
       Align = alTop
       Caption = 'Userdefined symbols:'
       ParentColor = False
@@ -133,8 +137,8 @@ object frmSymbolhandler: TfrmSymbolhandler
       Left = 0
       Height = 238
       Top = 15
-      Width = 303
-      Align = alClient
+      Width = 371
+      Align = alTop
       Columns = <      
         item
           Caption = 'Symbolname'
@@ -156,11 +160,42 @@ object frmSymbolhandler: TfrmSymbolhandler
       OnClick = ListView1Click
       OnDblClick = ListView1DblClick
     end
+    object tvSymbolGroups: TTreeView
+      Left = 0
+      Height = 159
+      Top = 273
+      Width = 371
+      Align = alClient
+      PopupMenu = PopupMenu2
+      ReadOnly = True
+      TabOrder = 1
+      OnDblClick = tvSymbolGroupsDblClick
+      OnExpanding = tvSymbolGroupsExpanding
+      Options = [tvoAutoItemHeight, tvoHideSelection, tvoKeepCollapsedNodes, tvoReadOnly, tvoShowButtons, tvoShowLines, tvoShowRoot, tvoToolTips, tvoThemedDraw]
+    end
+    object Splitter1: TSplitter
+      Cursor = crVSplit
+      Left = 0
+      Height = 5
+      Top = 253
+      Width = 371
+      Align = alTop
+      ResizeAnchor = akTop
+    end
+    object Label4: TLabel
+      Left = 0
+      Height = 15
+      Top = 258
+      Width = 371
+      Align = alTop
+      Caption = 'Symbol groups:'
+      ParentColor = False
+    end
   end
   object PopupMenu1: TPopupMenu
     Images = scImageList
-    left = 72
-    top = 80
+    Left = 72
+    Top = 80
     object Delete1: TMenuItem
       Caption = 'Delete'
       Default = True
@@ -174,8 +209,8 @@ object frmSymbolhandler: TfrmSymbolhandler
     end
   end
   object scImageList: TImageList
-    left = 215
-    top = 129
+    Left = 215
+    Top = 129
     Bitmap = {
       4C69020000001000000010000000FFFFFF00FFFFFF00FFFFFF00FFFFFF00FFFF
       FF00FFFFFF00FFFFFF00FFFFFF00FFFFFF00FFFFFF00FFFFFF00FFFFFF00FFFF
@@ -243,5 +278,21 @@ object frmSymbolhandler: TfrmSymbolhandler
       F3327777DD994444D1DB3333CCFB3333CCFB4444D1DB7777DD99CDCDF332FFFF
       FF00FFFFFF00FFFFFF00FFFFFF00
     }
+  end
+  object PopupMenu2: TPopupMenu
+    Images = scImageList
+    Left = 184
+    Top = 328
+    object miUnregister: TMenuItem
+      Caption = 'Unregister'
+      Default = True
+      ImageIndex = 0
+      OnClick = miUnregisterClick
+    end
+    object miUnregisterAll: TMenuItem
+      Caption = 'Unregister all'
+      ImageIndex = 1
+      OnClick = miUnregisterAllClick
+    end
   end
 end

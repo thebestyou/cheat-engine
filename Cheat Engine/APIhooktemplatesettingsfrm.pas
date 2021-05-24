@@ -5,8 +5,8 @@ unit APIhooktemplatesettingsfrm;
 interface
 
 uses
-  LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
-  Dialogs, StdCtrls, LResources, ExtCtrls;
+  LCLIntf, Lmessages, Messages, SysUtils, Classes, Graphics, Controls, Forms,
+  Dialogs, StdCtrls, LResources, ExtCtrls, betterControls;
 
 type
 

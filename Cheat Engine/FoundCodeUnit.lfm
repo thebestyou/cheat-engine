@@ -1,7 +1,7 @@
 object FoundCodeDialog: TFoundCodeDialog
-  Left = 773
+  Left = 985
   Height = 399
-  Top = 428
+  Top = 287
   Width = 430
   BorderIcons = [biSystemMenu]
   Caption = 'The following opcodes changed the selected address'
@@ -13,35 +13,34 @@ object FoundCodeDialog: TFoundCodeDialog
   OnDestroy = FormDestroy
   OnShow = FormShow
   Position = poOwnerFormCenter
-  LCLVersion = '2.0.0.4'
+  LCLVersion = '2.0.6.0'
   object Panel1: TPanel
     Left = 294
-    Height = 399
+    Height = 398
     Top = 0
     Width = 136
     Align = alRight
     AutoSize = True
     BevelOuter = bvNone
-    ClientHeight = 399
+    ClientHeight = 398
     ClientWidth = 136
-    ParentFont = False
     TabOrder = 0
     object Description: TLabel
       Left = 0
-      Height = 219
+      Height = 218
       Top = 140
       Width = 136
       Align = alClient
       Alignment = taCenter
       AutoSize = False
+      Caption = 'example'
       ParentColor = False
-      ParentFont = False
       WordWrap = True
     end
     object Panel2: TPanel
       Left = 0
       Height = 40
-      Top = 359
+      Top = 358
       Width = 136
       Align = alBottom
       AutoSize = True
@@ -190,18 +189,17 @@ object FoundCodeDialog: TFoundCodeDialog
   end
   object Panel4: TPanel
     Left = 0
-    Height = 399
+    Height = 398
     Top = 0
     Width = 294
     Align = alClient
     BevelOuter = bvNone
-    ClientHeight = 399
+    ClientHeight = 398
     ClientWidth = 294
-    ParentFont = False
     TabOrder = 1
     object FoundCodeList: TListView
       Left = 0
-      Height = 237
+      Height = 236
       Top = 0
       Width = 294
       Align = alClient
@@ -215,7 +213,6 @@ object FoundCodeDialog: TFoundCodeDialog
           Caption = 'Instruction'
           Width = 260
         end>
-      ColumnClick = False
       HideSelection = False
       MultiSelect = True
       ParentFont = False
@@ -225,16 +222,17 @@ object FoundCodeDialog: TFoundCodeDialog
       ScrollBars = ssVertical
       TabOrder = 0
       ViewStyle = vsReport
+      OnColumnClick = FoundCodeListColumnClick
       OnDblClick = FoundcodeListDblClick
       OnSelectItem = FoundCodeListSelectItem
     end
     object mInfo: TMemo
       Left = 0
       Height = 157
-      Top = 242
+      Top = 241
       Width = 294
       Align = alBottom
-      ParentFont = False
+      ParentColor = True
       ReadOnly = True
       ScrollBars = ssBoth
       TabOrder = 1
@@ -244,17 +242,26 @@ object FoundCodeDialog: TFoundCodeDialog
       Cursor = crVSplit
       Left = 0
       Height = 5
-      Top = 237
+      Top = 236
       Width = 294
       Align = alBottom
       ResizeAnchor = akBottom
     end
   end
+  object dbvmMissedEntries: TLabel
+    Left = 0
+    Height = 1
+    Top = 398
+    Width = 430
+    Align = alBottom
+    ParentColor = False
+    Visible = False
+  end
   object pmOptions: TPopupMenu
     Images = fcdImageList
     OnPopup = pmOptionsPopup
-    left = 64
-    top = 64
+    Left = 64
+    Top = 64
     object ReplacewithcodethatdoesnothingNOP1: TMenuItem
       Caption = 'Replace with code that does nothing (NOP)'
       ImageIndex = 3
@@ -308,12 +315,12 @@ object FoundCodeDialog: TFoundCodeDialog
   end
   object SaveDialog1: TSaveDialog
     Filter = 'Text files (*.txt)|*.txt'
-    left = 72
-    top = 152
+    Left = 72
+    Top = 152
   end
   object fcdImageList: TImageList
-    left = 198
-    top = 153
+    Left = 198
+    Top = 153
     Bitmap = {
       4C69070000001000000010000000FFFFFF00FFFFFF00FFFFFF00FFFFFF00FFFF
       FF00FFFFFF00FFFFFF00FFFFFF00FFFFFF00FFFFFF00FFFFFF00FFFFFF00FFFF
@@ -541,5 +548,11 @@ object FoundCodeDialog: TFoundCodeDialog
       DD16CEAD8C76CB8F52BADC9045DCDC9145DDCD9052BBD1AF8C79E2DFDD18FFFF
       FF00FFFFFF00FFFFFF00FFFFFF00
     }
+  end
+  object timerEntryInfoUpdate: TTimer
+    Interval = 250
+    OnTimer = timerEntryInfoUpdateTimer
+    Left = 184
+    Top = 40
   end
 end

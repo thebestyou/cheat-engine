@@ -8,7 +8,13 @@ uses
   {$ifdef JNI}
     Classes, SysUtils, networkinterface, unixporthelper, newkernelhandler;
   {$else}
-  {jwawindows,} windows, Classes, SysUtils, networkinterface, newkernelhandler, CEFuncProc;
+  {$ifdef darwin}
+  mactypes, macport,
+  {$endif}
+  {$ifdef windows}
+  {jwawindows,} windows,
+  {$endif}
+  Classes, SysUtils, networkinterface, newkernelhandler, CEFuncProc;
   {$endif}
 
 
@@ -299,6 +305,9 @@ procedure InitializeNetworkInterface;
 var tm: TThreadManager;
 begin
   //hook the threadmanager if it hasn't been hooked yet
+
+  {$ifdef windows}
+
   OutputDebugString('InitializeNetworkInterface');
 
   if not threadManagerIsHooked then
@@ -314,10 +323,10 @@ begin
   end;
 
   newkernelhandler.OpenProcess:=@NetworkOpenProcess;
-  newkernelhandler.ReadProcessMemory:=@NetworkReadProcessMemory;
+  newkernelhandler.ReadProcessMemoryActual:=@NetworkReadProcessMemory;
   newkernelhandler.WriteProcessMemoryActual:=@NetworkWriteProcessMemory;
   newkernelhandler.VirtualProtectEx:=@NetworkVirtualProtectEx;
-  newkernelhandler.VirtualQueryEx:=@NetworkVirtualQueryEx;
+  newkernelhandler.VirtualQueryExActual:=@NetworkVirtualQueryEx;
   newkernelhandler.CreateToolhelp32Snapshot:=@NetworkCreateToolhelp32Snapshot;
   newkernelhandler.Process32First:=@NetworkProcess32First;
   newkernelhandler.Process32Next:=@NetworkProcess32Next;
@@ -335,7 +344,7 @@ begin
 
   newkernelhandler.VirtualQueryEx_StartCache:=@NetworkVirtualQueryEx_StartCache;
   newkernelhandler.VirtualQueryEx_EndCache:=@NetworkVirtualQueryEx_EndCache;
-
+   {$endif}
 
 end;
 

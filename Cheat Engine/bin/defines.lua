@@ -346,6 +346,7 @@ GW_HWNDLAST = 1
 GW_HWNDNEXT = 2
 GW_HWNDPREV = 3
 GW_HWNDOWNER = 4
+GW_OWNER = 4
 GW_CHILD = 5;
 GW_ENABLEDPOPUP = 6;
 
@@ -402,6 +403,11 @@ cdsHot=6
 cdsMarked=7
 cdsIndeterminate=8
 
+cdPrePaint=0
+cdPostPaint=1
+cdPreErase=2
+cdPostErase=3
+
 drBounds=0
 drIcon=1
 drLabel=2
@@ -418,3 +424,186 @@ fmShareDenyWrite= 0x0020
 fmShareDenyRead = 0x0030
 fmShareDenyNone = 0x0040
 
+crDefault     = 0
+crNone        = -1
+crArrow       = -2
+crCross       = -3
+crIBeam       = -4
+crSize        = -22
+crSizeNESW    = -6 
+crSizeNS      = -7
+crSizeNWSE    = -8
+crSizeWE      = -9
+crSizeNW      = -23
+crSizeN       = -24
+crSizeNE      = -25
+crSizeW       = -26
+crSizeE       = -27
+crSizeSW      = -28
+crSizeS       = -29
+crSizeSE      = -30
+crUpArrow     = -10
+crHourGlass   = -11
+crDrag        = -12
+crNoDrop      = -13
+crHSplit      = -14
+crVSplit      = -15
+crMultiDrag   = -16
+crSQLWait     = -17
+crNo          = -18
+crAppStart    = -19
+crHelp        = -20
+crHandPoint   = -21
+crSizeAll     = -22   
+
+--colors
+  CLR_NONE = 0xFFFFFFFF
+  CLR_DEFAULT = 0xFF000000
+  CLR_INVALID = 0xFFFFFFFF
+
+  COLOR_SCROLLBAR = 0
+  COLOR_BACKGROUND = 1
+  COLOR_ACTIVECAPTION = 2
+  COLOR_INACTIVECAPTION = 3
+  COLOR_MENU = 4
+  COLOR_WINDOW = 5
+  COLOR_WINDOWFRAME = 6
+  COLOR_MENUTEXT = 7
+  COLOR_WINDOWTEXT = 8
+  COLOR_CAPTIONTEXT = 9
+  COLOR_ACTIVEBORDER = 10
+  COLOR_INACTIVEBORDER = 11
+  COLOR_APPWORKSPACE = 12
+  COLOR_HIGHLIGHT = 13
+  COLOR_HIGHLIGHTTEXT = 14
+  COLOR_BTNFACE = 15
+  COLOR_BTNSHADOW = 16
+  COLOR_GRAYTEXT = 17
+  COLOR_BTNTEXT = 18
+  COLOR_INACTIVECAPTIONTEXT = 19
+  COLOR_BTNHIGHLIGHT = 20
+  COLOR_3DDKSHADOW = 21
+  COLOR_3DLIGHT = 22
+  COLOR_INFOTEXT = 23
+  COLOR_INFOBK = 24
+  COLOR_HOTLIGHT = 26
+  COLOR_GRADIENTACTIVECAPTION = 27
+  COLOR_GRADIENTINACTIVECAPTION = 28
+  COLOR_MENUHILIGHT = 29
+  COLOR_MENUBAR = 30
+
+  COLOR_FORM = 31
+
+  COLOR_ENDCOLORS = COLOR_FORM
+
+  COLOR_DESKTOP = COLOR_BACKGROUND
+  COLOR_3DFACE = COLOR_BTNFACE
+  COLOR_3DSHADOW = COLOR_BTNSHADOW
+  COLOR_3DHIGHLIGHT = COLOR_BTNHIGHLIGHT
+  COLOR_3DHILIGHT = COLOR_BTNHIGHLIGHT
+  COLOR_BTNHILIGHT = COLOR_BTNHIGHLIGHT
+
+  MAX_SYS_COLORS = COLOR_ENDCOLORS
+  SYS_COLOR_BASE = 0x80000000
+
+  clBlack   = 0x000000
+  clMaroon  = 0x000080
+  clGreen   = 0x008000
+  clOlive   = 0x008080
+  clNavy    = 0x800000
+  clPurple  = 0x800080
+  clTeal    = 0x808000
+  clGray    = 0x808080
+  clSilver  = 0xC0C0C0
+  clRed     = 0x0000FF
+  clLime    = 0x00FF00
+  clYellow  = 0x00FFFF
+  clBlue    = 0xFF0000
+  clFuchsia = 0xFF00FF
+  clAqua    = 0xFFFF00
+  clLtGray  = 0xC0C0C0 -- clSilver alias
+  clDkGray  = 0x808080 -- clGray alias
+  clWhite   = 0xFFFFFF
+  StandardColorsCount = 16
+
+  -- extended colors
+  clMoneyGreen = 0xC0DCC0
+  clSkyBlue    = 0xF0CAA6
+  clCream      = 0xF0FBFF
+  clMedGray    = 0xA4A0A0
+  ExtendedColorCount = 4
+
+  -- special colors
+  clNone    = 0x1FFFFFFF
+  clDefault = 0x20000000
+
+  -- system colors
+  clScrollBar               = SYS_COLOR_BASE|COLOR_SCROLLBAR
+  clBackground              = SYS_COLOR_BASE|COLOR_BACKGROUND
+  clActiveCaption           = SYS_COLOR_BASE|COLOR_ACTIVECAPTION
+  clInactiveCaption         = SYS_COLOR_BASE|COLOR_INACTIVECAPTION
+  clMenu                    = SYS_COLOR_BASE|COLOR_MENU
+if not clWindow then clWindow = SYS_COLOR_BASE|COLOR_WINDOW end
+  clWindowFrame             = SYS_COLOR_BASE|COLOR_WINDOWFRAME
+  clMenuText                = SYS_COLOR_BASE|COLOR_MENUTEXT
+if not clWindowText then clWindowText = SYS_COLOR_BASE|COLOR_WINDOWTEXT end
+  clCaptionText             = SYS_COLOR_BASE|COLOR_CAPTIONTEXT
+  clActiveBorder            = SYS_COLOR_BASE|COLOR_ACTIVEBORDER
+  clInactiveBorder          = SYS_COLOR_BASE|COLOR_INACTIVEBORDER
+  clAppWorkspace            = SYS_COLOR_BASE|COLOR_APPWORKSPACE
+  clHighlight               = SYS_COLOR_BASE|COLOR_HIGHLIGHT
+  clHighlightText           = SYS_COLOR_BASE|COLOR_HIGHLIGHTTEXT
+  clBtnFace                 = SYS_COLOR_BASE|COLOR_BTNFACE
+  clBtnShadow               = SYS_COLOR_BASE|COLOR_BTNSHADOW
+  clGrayText                = SYS_COLOR_BASE|COLOR_GRAYTEXT
+  clBtnText                 = SYS_COLOR_BASE|COLOR_BTNTEXT
+  clInactiveCaptionText     = SYS_COLOR_BASE|COLOR_INACTIVECAPTIONTEXT
+  clBtnHighlight            = SYS_COLOR_BASE|COLOR_BTNHIGHLIGHT
+  cl3DDkShadow              = SYS_COLOR_BASE|COLOR_3DDKSHADOW
+  cl3DLight                 = SYS_COLOR_BASE|COLOR_3DLIGHT
+  clInfoText                = SYS_COLOR_BASE|COLOR_INFOTEXT
+  clInfoBk                  = SYS_COLOR_BASE|COLOR_INFOBK
+
+  clHotLight                = SYS_COLOR_BASE|COLOR_HOTLIGHT
+  clGradientActiveCaption   = SYS_COLOR_BASE|COLOR_GRADIENTACTIVECAPTION
+  clGradientInactiveCaption = SYS_COLOR_BASE|COLOR_GRADIENTINACTIVECAPTION
+  clMenuHighlight           = SYS_COLOR_BASE|COLOR_MENUHILIGHT
+  clMenuBar                 = SYS_COLOR_BASE|COLOR_MENUBAR
+  clForm                    = SYS_COLOR_BASE|COLOR_FORM
+
+  -- synonyms: do not show them in color lists
+  clColorDesktop            = SYS_COLOR_BASE|COLOR_DESKTOP
+  cl3DFace                  = SYS_COLOR_BASE|COLOR_3DFACE
+  cl3DShadow                = SYS_COLOR_BASE|COLOR_3DSHADOW
+  cl3DHiLight               = SYS_COLOR_BASE|COLOR_3DHIGHLIGHT
+  clBtnHiLight              = SYS_COLOR_BASE|COLOR_BTNHILIGHT
+
+  clFirstSpecialColor = clBtnHiLight
+
+  clMask = clWhite
+  clDontMask = clBlack
+
+
+--pen mode
+pmBlack=0
+pmWhite=1
+pmNop=2
+pmNot=3
+pmCopy=4
+pmNotCopy=5
+pmMergePenNot=6
+pmMaskPenNot=7
+pmMergeNotPen=8
+pmMaskNotPen=9
+pmMerge=10
+pmNotMerge=11
+pmMask=12
+pmNotMask=13
+pmXor=14
+pmNotXor=15
+
+tbpsNone=0
+tbpsIndeterminate=1
+tbpsNormal=2
+tbpsError=3
+tbpsPaused=4

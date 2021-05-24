@@ -5,8 +5,14 @@ unit frmDissectwindowUnit;
 interface
 
 uses
-  windows, LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
-  Dialogs, ComCtrls,StdCtrls,CEFuncProc, ExtCtrls, LResources, Menus;
+  {$ifdef darwin}
+  macport,
+  {$endif}
+  {$ifdef windows}
+  windows,
+  {$endif}
+  LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
+  Dialogs, ComCtrls,StdCtrls,CEFuncProc, ExtCtrls, LResources, Menus, betterControls;
 
 type TCETimerhookdata=record
   processed: boolean;
@@ -53,7 +59,7 @@ var
 
 implementation
 
-uses frmCapturedTimersUnit, ProcessHandlerUnit, Parsers;
+uses frmCapturedTimersUnit, ProcessHandlerUnit, Parsers, LazUTF8;
 
 //uses frmCapturedTimersUnit;
 
@@ -73,8 +79,8 @@ begin
 end;
 
 procedure TfrmdissectWindow.FormCreate(Sender: TObject);
-var title:pchar;
-    classname:pchar;
+var title:pwidechar;
+    classname:pwidechar;
     winhandle,h:thandle;
     winprocess:dword;
     i,err: integer;
@@ -85,18 +91,19 @@ begin
   //fill the treeview with stuff
   //find the windows that have this processid as owner
 //  processid:=getcurrentprocessid;
+  {$ifdef windows}
   winhandle:=getwindow(getforegroundwindow,GW_HWNDFIRST);
 
-  getmem(title,101);
-  getmem(classname,101);
+  getmem(title,202);
+  getmem(classname,202);
 
   while winhandle<>0 do
   begin
     GetWindowThreadProcessId(winhandle,addr(winprocess));
     title[0]:=#0;
     classname[0]:=#0;
-    getwindowtext(winhandle,title,100);
-    GetClassName(winhandle,classname,100);
+    getwindowtextW(winhandle,title,100);
+    GetClassNameW(winhandle,classname,100);
     classname[100]:=#0;
     title[100]:=#0;
 
@@ -125,8 +132,8 @@ begin
         GetWindowThreadProcessId(winhandle,addr(winprocess));
         title[0]:=#0;
         classname[0]:=#0;
-        getwindowtext(winhandle,title,100);
-        GetClassName(winhandle,classname,100);
+        getwindowtextW(winhandle,title,100);
+        GetClassNameW(winhandle,classname,100);
         classname[100]:=#0;
         title[100]:=#0;
 
@@ -148,7 +155,7 @@ begin
 
   freememandnil(title);
   freememandnil(classname);
-
+  {$endif}
 end;
 
 procedure TfrmdissectWindow.Button2Click(Sender: TObject);
@@ -156,6 +163,7 @@ var h:Thandle;
     err:integer;
     title,classname: pchar;
 begin
+  {$ifdef windows}
   //get the handle
   getmem(title,101);
   getmem(classname,101);
@@ -180,9 +188,9 @@ begin
         showwindow(h,sw_show);
 
       if iswindowvisible(h) then
-        treeview1.selected.text:=IntToHex(h,8)+'-'+title+' - ('+classname+')'
+        treeview1.selected.text:=IntToHex(h,8)+'-'+wincptoutf8(title)+' - ('+wincptoutf8(classname)+')'
       else
-        treeview1.selected.text:=IntToHex(h, 8)+'-'+title+' - ('+classname+') ('+rsInvis+')';
+        treeview1.selected.text:=IntToHex(h, 8)+'-'+wincptoutf8(title)+' - ('+wincptoutf8(classname)+') ('+rsInvis+')';
 
     except
     end;
@@ -190,6 +198,7 @@ begin
 
   freememandnil(classname);
   freememandnil(title);
+  {$endif}
 end;
 
 procedure TfrmdissectWindow.Button1Click(Sender: TObject);
@@ -295,6 +304,7 @@ procedure TfrmdissectWindow.Button3Click(Sender: TObject);
 var h: thandle;
     err,i: integer;
 begin
+  {$ifdef windows}
   if treeview1.Selected<>nil then
   begin
     err:=pos('-',treeview1.selected.Text);
@@ -305,16 +315,23 @@ begin
 
     end;
   end;
+  {$endif}
 end;
 
 procedure TfrmdissectWindow.Button6Click(Sender: TObject);
-var oldname:pchar;
+
+    {$ifdef windows}
+var
+    oldname:pwidechar;
     h:hwnd;
     err: integer;
-    name:string;
-    title,classname: pchar;
+    name:widestring;
+    n: string;
+    title,classname: pwidechar;
+    {$endif}
 
 begin
+  {$ifdef windows}
   if treeview1.Selected=nil then exit;
 
   err:=pos('-',treeview1.selected.Text);
@@ -323,23 +340,25 @@ begin
 
 
 
-    getmem(oldname,255);
+    getmem(oldname,512);
     try
-      GetWindowText(h,oldname,254);
+      GetWindowTextW(h,oldname,254);
       oldname[254]:=#0; //make sure
       name:=oldname;
 
-      if inputquery(rsDissectWindows, rsGiveTheNewTextForThisWindow, name) then
+      if inputquery(rsDissectWindows, rsGiveTheNewTextForThisWindow, n) then
       begin
-        SetWindowText(h,pchar(name));
+        name:=n;
+        //name:=UTF8ToWinCP(name);
+        SetWindowTextW(h,pwidechar(name));
 
-        getmem(title,101);
-        getmem(classname,101);
+        getmem(title,202);
+        getmem(classname,202);
         try
           title[0]:=#0;
           classname[0]:=#0;
-          getwindowtext(h,title,100);
-          GetClassName(h,classname,100);
+          getwindowtextw(h,title,100);
+          GetClassNameW(h,classname,100);
           classname[100]:=#0;
           title[100]:=#0;
 
@@ -359,6 +378,7 @@ begin
   except
 
   end;
+  {$endif}
 end;
 
 

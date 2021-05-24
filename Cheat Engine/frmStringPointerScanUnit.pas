@@ -10,9 +10,15 @@ unit frmStringPointerScanUnit;
 interface
 
 uses
-  windows, Classes, SysUtils, FileUtil, LResources, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls, ComCtrls,
-  cefuncproc, newkernelhandler, frmStringMapUnit, MemFuncs, AvgLvlTree, Menus,
-  bigmemallochandler, math, maps, oldRegExpr, symbolhandler, commonTypeDefs;
+  {$ifdef darwin}
+  macport,
+  {$endif}
+  {$ifdef windows}
+  windows,
+  {$endif}
+  Classes, SysUtils, FileUtil, LResources, Forms, Controls, Graphics, Dialogs, StdCtrls, ExtCtrls, ComCtrls,
+  CEFuncProc, NewKernelHandler, frmStringMapUnit, MemFuncs, AvgLvlTree, Menus,
+  bigmemallochandler, math, maps, oldRegExpr, symbolhandler, commonTypeDefs, lmessages, LCLIntf, betterControls;
 
 const
   wm_sps_done=wm_user+1;
@@ -46,7 +52,7 @@ type
   type TPointerRecord=packed record
     level: integer;
     stringsize: integer;
-    unicode: BOOL;
+    unicode: longbool;
     offset: TDwordArray;
   end;
   PPointerRecord=^TPointerRecord;
@@ -190,7 +196,7 @@ type
 
 
     procedure handleBlock(blockaddress: ptruint; level: integer; path: TPointerpath);
-    function addStringPath(level: integer; path: tpointerpath; stringsize: integer; unicode: bool): boolean;
+    function addStringPath(level: integer; path: tpointerpath; stringsize: integer; unicode: longbool): boolean;
     function comparePath(level: integer; path: tpointerpath; stringsize: integer): boolean;
 
     function getAddressFromPath(base :ptruint; column: integer; level: integer; const path: TPointerPath): ptruint;
@@ -431,25 +437,35 @@ begin
 end;
 
 function TPointerfileReader.getPointerRec(index: qword): PPointerRecord;
-var blocksize: integer;
+var
+  blocksize: integer;
+  newpos: int64;
 begin
+
   result:=nil;
 
   if (buffersize=0) or (not InRangeQ(index, bufferindex, bufferindex+buffersize-1)) then
   begin
+
     blocksize:=count-index;
     blocksize:=min(blocksize, 4096);
 
-    pointerfile.Position:=sizeof(pointerfileLevelwidth)+index*entrysize;
+    newpos:=sizeof(pointerfileLevelwidth)+index*entrysize;
+
+    pointerfile.Position:=newpos;
+
+
     if pointerfile.Read(pointerrecords^, entrysize*blocksize)=entrysize*blocksize then
     begin
       bufferindex:=index;
       buffersize:=blocksize;
-    end;
+    end
+    else
+      exit(nil);
   end;
 
-  result:=PPointerRecord(ptruint(pointerrecords)+(index-bufferindex)*entrysize);
 
+  result:=PPointerRecord(ptruint(pointerrecords)+(index-bufferindex)*entrysize);
 end;
 
 function TPointerfilereader.getAddressFromPointerRecord(p: ppointerrecord; baseaddress: ptruint; shadow: ptruint; shadowsize: integer): ptruint;
@@ -587,6 +603,7 @@ begin
 
   entrysize:=(pointerfileLevelwidth+4)*sizeof(dword); //+4 for : Levelsize of pointer, stringsize and the isunicode boolean and levelwidth is based on 0 (0=1 offset, 1=2 offsets, etc..)
   fcount:=(pointerfile.size-sizeof(pointerfileLevelwidth)) div (entrysize);
+
 
   getmem(pointerrecords, entrysize*4096);
 
@@ -1510,7 +1527,7 @@ begin
 
 end;
 
-function TScanner.addStringPath(level: integer; path: tpointerpath; stringsize: integer; unicode: BOOL): boolean;
+function TScanner.addStringPath(level: integer; path: tpointerpath; stringsize: integer; unicode: longbool): boolean;
 begin
   result:=false;
   if (baseaddress2<>0) and (not comparePath(level, path, stringsize)) then exit;
@@ -1816,11 +1833,20 @@ begin
     if p<>nil then
     begin
       item.caption:=inttohex(p.offset[0],1);
-      for i:=1 to p.level do
-        item.SubItems.add(inttohex(p.offset[i],1));
 
-      for i:=p.level+1 to pointerfilereader.levelWidth do
-        item.SubItems.Add('');
+      if length(p.offset)<p.level then
+      begin
+        item.subitems.add('bug');
+        //raise exception.create('Assertion error. p.offset is '+inttostr(length(p.offset))+' entries long and p.level is '+inttostr(p.level))
+      end
+      else
+      begin
+        for i:=1 to p.level do
+          item.SubItems.add(inttohex(p.offset[i],1));
+
+        for i:=p.level+1 to pointerfilereader.levelWidth do
+          item.SubItems.Add('');
+      end;
     end;
 
     if a>0 then

@@ -6,7 +6,7 @@ interface
 
 uses
   Classes, SysUtils, FileUtil, Forms, Controls, Graphics, Dialogs, StdCtrls,
-  ExtCtrls, cefuncproc, StructuresFrm2, vartypestrings, math, CustomTypeHandler, commonTypeDefs;
+  ExtCtrls, cefuncproc, StructuresFrm2, vartypestrings, math, CustomTypeHandler, commonTypeDefs, betterControls;
 
 resourcestring
   rsS2EILocalStruct = 'Local struct:';
@@ -315,6 +315,8 @@ end;
 procedure TfrmStructures2ElementInfo.FormCreate(Sender: TObject);
 var i: integer;
 begin
+  pnlBackground.color:=clWindow;
+
   while cbStructType.items.count>1 do
     cbStructType.Items.Delete(1);
 

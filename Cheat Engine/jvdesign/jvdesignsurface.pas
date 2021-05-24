@@ -961,7 +961,12 @@ var l: TObjectList;
     i: integer;
     newparent: TComponent;
 
+    cmp: tpoint;
+    fix: integer;
+
+
 begin
+  fix:=0;
   s:=TStringStream.Create(clipboard.AsText);
   ms:=TMemoryStream.Create;
 
@@ -970,21 +975,28 @@ begin
   try
     LRSObjectTextToBinary(s,ms);
     ms.position:=0;
-
+    
     l:=tobjectlist.create;
     ClearSelection;
     while ms.position<ms.size do
     begin
       C:=nil;
       try
+        SelectedContainer.DisableAutoSizing;
         ReadComponentFromBinaryStream(ms, C, @fcce, container, newparent, container);
+        fix := fix+1;
         l.add(c);
+        SelectedContainer.EnableAutoSizing;
       except
         break;
       end;
     end;
 
   finally
+    if fix > 1 then
+    begin
+      SelectedContainer.EnableAutoSizing;
+    end;
     ms.free;
     s.free;
   end;
@@ -994,9 +1006,13 @@ begin
   active:=false;
   active:=true;
 
+  self.Change;
+
+
   for i:=0 to l.count-1 do
     selector.AddToSelection(TControl(l[i]));
   SelectionChange;
+
 
 end;
 

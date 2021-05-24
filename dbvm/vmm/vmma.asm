@@ -11,6 +11,9 @@ extern cinthandler
 extern menu
 extern memorylist
 extern clearScreen
+extern getAPICID
+
+
 
 GLOBAL amain
 GLOBAL vmmstart
@@ -45,6 +48,9 @@ GLOBAL initcs
 GLOBAL extramemory
 GLOBAL extramemorysize
 
+GLOBAL contiguousmemoryPA
+GLOBAL contiguousmemorysize
+
 GLOBAL dbvmversion
 GLOBAL exportlist
 
@@ -67,6 +73,8 @@ pagedirlvl4:        dq 0 ;virtual address of the pml4 page (the memory after thi
 nextstack:          dq 0 ;start of stack for the next cpu
 extramemory:        dq 0 ;physical address of a contiguous block of physical memory available to DBVM
 extramemorysize:    dq 0 ;number of pages in extramemory
+contiguousmemoryPA: dq 0 ;physical address of a contiguous block of physical memory available for device access
+contiguousmemorysize:dq 0 ;number of pages left in contiguousmemoryPA
 dbvmversion:        dq 11
 exportlist:         dq 0
 ;uefibooted:         dq 0 ;if set it means this has to launch the AP cpu's as well
@@ -180,6 +188,21 @@ vmcalltest_asm:
   ret
 
 
+extern Password1
+extern Password3
+
+global _vmcall
+_vmcall:
+  sub rsp,8
+  mov rax,rdi  ;data
+  mov rdx,[Password1]  ;password1
+  mov rcx,[Password3]
+  call [vmcall_instr]
+  add rsp,8
+  ret
+
+
+
 
 global vmcall_setintredirects
 vmcall_setintredirects:
@@ -244,7 +267,7 @@ struc vmxloop_amd_stackframe
   saved_rcx:      resq 1
   saved_rbx:      resq 1
   saved_rax:      resq 1
-                  resq 1  ;alignment
+  saved_fsbase:   resq 1
   fxsavespace:    resb 512 ;fxsavespace must be aligned
   psavedstate:    resq 1 ;saved param3
   vmcb_PA:        resq 1 ;saved param2
@@ -317,12 +340,13 @@ vmrun_loop:
 ;xchg bx,bx
 mov rax,[rsp+vmcb_PA]  ;for those wondering, RAX is stored in the vmcb->RAX field, not here
 vmload
+clgi
+cli
 vmrun ;rax
+cli
+clgi
 vmsave
 
-
-;on return RAX and RSP are unchanged, but ALL other registers are changed and MUST be saved first
-;xchg bx,bx
 
 db 0x48
 fxsave [rsp+fxsavespace]
@@ -342,6 +366,19 @@ mov [rsp+saved_rcx],rcx
 mov [rsp+saved_rbx],rbx
 mov [rsp+saved_rax],rax
 
+;save guest fs-base
+mov ecx,0c0000100h
+rdmsr
+shl rdx,32
+add rax,rdx
+mov [rsp+saved_fsbase],rax
+
+;restore host fs-base
+mov ecx,0c0000100h
+mov eax,[rsp+currentcpuinfo]
+mov edx,[rsp+currentcpuinfo+4]
+wrmsr
+
 mov rdi,[rsp+currentcpuinfo]
 lea rsi,[rsp+saved_r15] ;vmregisters
 lea rdx,[rsp+fxsavespace] ;fxsave
@@ -352,7 +389,12 @@ call vmexit_amd
 cmp eax,1
 je vmrun_exit
 
-;restore
+;restore guest
+mov ecx,0c0000100h ;fs-base
+mov eax,[rsp+saved_fsbase]
+mov edx,[rsp+saved_fsbase+4]
+wrmsr
+
 db 0x48
 fxrstor [rsp+fxsavespace]
 mov r15,[rsp+saved_r15]
@@ -523,11 +565,6 @@ sub rsp,15*8
 mov [rsp+14*8],rax
 mov [rsp+11*8],rdx
 
-rdtsc
-
-mov dword [fs:0x18],eax ;lasttsc
-mov dword [fs:0x1c],edx
-
 
 mov [rsp],r15
 mov [rsp+1*8],r14
@@ -606,22 +643,6 @@ jae vmxloop_exitvm
 
 ;returned 0, so
 
-;adjust the TSC
-rdtsc  ;current time
-shl rdx,32
-or rax,rdx
-
-mov rdx,qword [fs:0x18] ;entry time
-
-;rax is new timestamp
-;rdx is old timestamp
-
-sub rax,rdx ;rax is now the difference
-add rax,100
-add qword [fs:0x20],rax ;add to the total delay
-
-
-
 ;restore vmx registers (esp-36)
 pop r15
 pop r14
@@ -645,10 +666,6 @@ vmresume
 ;never executed unless on error
 ;restore state of vmm
 
-
-%ifdef JTAG
-db 0xf1 ;jtag breakpoint
-%endif
 
 pop r15
 pop r14
@@ -689,9 +706,6 @@ pop rax
 
 vmlaunch
 
-%ifdef JTAG
-db 0xf1 ;jtag breakpoint
-%endif
 
 ;never executed unless on error
 ;restore state of vmm
@@ -717,9 +731,7 @@ pop rbx
 pop rax
 
 vmresume
-%ifdef JTAG
-db 0xf1 ;jtag breakpoint
-%endif
+
 
 ;never executed unless on error
 mov dword [fs:0x10],0xce00 ;exitreason 0xce00
@@ -1398,6 +1410,17 @@ db 0xcc
 db 0xcc
 db 0xcc
 
+global setDR1
+;--------------------;
+;setDR1(ULONG newdr1);
+;--------------------;
+setDR1:
+mov dr1,rdi
+ret
+db 0xcc
+db 0xcc
+db 0xcc
+
 global getDR2
 ;------------------;
 ;ULONG getDR2(void);
@@ -1409,12 +1432,34 @@ db 0xcc
 db 0xcc
 db 0xcc
 
+global setDR2
+;--------------------;
+;setDR2(ULONG newdr2);
+;--------------------;
+setDR2:
+mov dr2,rdi
+ret
+db 0xcc
+db 0xcc
+db 0xcc
+
 global getDR3
 ;------------------;
 ;ULONG getDR3(void);
 ;------------------;
 getDR3:
 mov rax,dr3
+ret
+db 0xcc
+db 0xcc
+db 0xcc
+
+global setDR3
+;--------------------;
+;setDR3(ULONG newdr3);
+;--------------------;
+setDR3:
+mov dr3,rdi
 ret
 db 0xcc
 db 0xcc
@@ -2328,8 +2373,9 @@ infloop:
 nop
 nop
 xchg bx,bx
+cpuid
 nop
-hlt
+;hlt
 nop
 nop
 xchg bx,bx ;should never happen
@@ -2440,6 +2486,9 @@ and eax,0x7FFFFFFF
 mov cr0,eax
 
 xor eax,eax
+cpuid
+xor eax,eax
+
 mov cr3,eax
 
 ;unset IA32_EFER_LME to 0 (disable 64 bits)
@@ -2757,6 +2806,17 @@ mov si,(str_givingup-movetoreal)
 call printstring
 
 notok_loop:
+sti
+mov ax,0xb800
+mov ds,ax
+mov byte [0],'X'
+mov byte [1],025h
+mov byte [2],'X'
+mov byte [3],025h
+mov byte [4],'X'
+mov byte [5],025h
+mov byte [6],'X'
+mov byte [7],025h
 nop
 nop
 cpuid
@@ -2824,6 +2884,8 @@ mov byte [7],6;
 
 ;jmp readok
 
+
+
 xor ax,ax
 mov ds,ax
 
@@ -2870,7 +2932,9 @@ pop ax
 beforeboot:
 nop
 nop
+cpuid
 nop
+
 
 
 ;jmp beforeboot

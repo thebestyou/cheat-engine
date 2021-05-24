@@ -4,11 +4,13 @@
  */
 
 
+
 #include "common.h"
 #include "main.h"
 #include "mm.h"
 #include "neward.h"
 #include "apic.h"
+#include "displaydebug.h"
 
 #include "multicore.h"
 #include "inthandlers.h"
@@ -31,6 +33,8 @@
 #include "exports.h"
 
 #include "luahandler.h"
+#include "interrupthandler.h"
+
 
 //#include "psod.h" //for pink screen of death support
 
@@ -43,12 +47,12 @@
 
 
 
-void menu(void);
+
 void menu2(void);
 
 
 
-PINT_VECTOR intvector=NULL;
+
 
 unsigned char *ffpage=NULL;
 PPTE_PAE   ffpagetable=NULL;
@@ -64,6 +68,7 @@ int cpu_type;
 int cpu_ext_modelID;
 int cpu_ext_familyID;
 
+int debugtestvar=0x12345678;
 
 
 unsigned long long IA32_APIC_BASE=0xfee00000;
@@ -83,8 +88,6 @@ int needtospawnApplicationProcessors=0; //the display is cluttered as it is
 #endif
 
 
-#define SETINT(INTNR) intvector[INTNR].wLowOffset=(WORD)(UINT64)inthandler##INTNR; \
-                      intvector[INTNR].wHighOffset=(WORD)((UINT64)inthandler##INTNR >> 16);
 
 
 #ifdef DEBUG
@@ -98,347 +101,13 @@ int autostart=1;
 pcpuinfo firstcpuinfo, lastaddedcpuinfo; //just for debugging, nothing important
 
 
-#ifdef DEBUGINTHANDLER
-criticalSection cinthandlerMenuCS;
-#endif
 
-int IntHandlerDebug=0;
 
 char bootdisk;
 
 
 
-int cinthandler(unsigned long long *stack, int intnr) //todo: move to it's own sourcefile
-{
-  PRFLAGS rflags;
-  int errorcode=0;
-  UINT64 errorcodeValue;
-  int i;
-  DWORD thisAPICID;
-  int cpunr=0;
 
-#ifdef DEBUG
-  sendstringCS.ignorelock=1;
-  sendstringfCS.ignorelock=1;
-#endif
-
-  if (readMSRSafe(IA32_FS_BASE_MSR)==0)
-  {
-    sendstringf("Invalid FS base during exception\n");
-    while (1) ;
-  }
-
-  pcpuinfo cpuinfo=getcpuinfo();
-  cpunr=cpuinfo->cpunr;
-
-  //debug, remove:
-  //if PIC_StillEnabled
-  //outportb(0x20,0x20);
-  //outportb(0xa0,0x20);
-
-
-  //apic_eoi();
-  //^^^
-
-
-  UINT64 originalDR7=getDR7();
-
-  if (intnr==1)
-  {
-    //disable breakpoints
-    setDR7(0ULL);
-  }
-
-  thisAPICID=getAPICID();
-
-#ifdef CHECKAPICID
-  if (thisAPICID!=cpuinfo->apicid)
-  {
-    sendstringCS.ignorelock=1;
-    sendstringfCS.ignorelock=1;
-    sendstringf("Interrupt %d. Invalid cpuinfo", intnr);
-    while(1);
-  }
-#endif
-
-
-
-  sendstringCS.lockcount=0;
-  sendstringCS.locked=0;
-  sendstringfCS.lockcount=0;
-  sendstringfCS.locked=0;
-
-
- // sendstringf("interrupt fired : %d (%x)\n\r", intnr,intnr);
-
-  sendstringf("cpunr=%d (apicid=%d)\n\r",cpunr, thisAPICID);
-  sendstringf("intnr=%d\n\r",intnr);
-  sendstringf("rsp=%x\n\r",getRSP());
-  sendstringf("cr2=%6\n\r",getCR2());
-  errorcode=0;
-
-
-  if ((stack[17]==80) && (stack[18]==80))
-  {
-    //not sure...
-    if ((stack[16]>=0x00400000) && (stack[16]<0x00800000))
-    {
-      //in the region of the code of the vmm, so I guess it's no errorcode (and cs and eflags=80)
-      errorcode=0;
-    }
-    else
-      errorcode=1;
-  }
-  else
-  if (stack[18]==80)
-    errorcode=1;
-  else
-  if (stack[17]==80)
-    errorcode=0;
-
-  if (errorcode)
-  {
-
-    errorcodeValue=stack[16];
-    sendstringf("Interrupt has errorcode : %x (",errorcodeValue);
-    if (errorcodeValue & 1)
-    {
-      sendstring("EXT ");
-    }
-
-    if (errorcodeValue & 2)
-    {
-      sendstring("IDT ");
-    }
-
-    if (errorcodeValue & 4)
-    {
-      sendstring("TI ");
-    }
-
-    sendstringf("%x ",errorcodeValue & 0xFFFFFFF8);
-
-    sendstringf(")\n\r");
-  }
-  else
-  {
-    //sendstringf("Interrupt has no errorcode\n\r");
-  }
-
-  sendstringf("rip=%x\n\r",stack[16+errorcode]);
-  sendstringf("rflags=%x\n\r",stack[16+2+errorcode]);
-
-
-  rflags=(PRFLAGS)&stack[16+2+errorcode];
-
-
-  if ((intnr==2) && (rflags->IF==0))
-  {
-    cpuinfo->NMIOccured=1;
-    NMIcount++;
-
-    cpuinfo->NMIOccured=2;
-    /*
-
-    //set up NMI window exiting
-
-    if (vmx_enableNMIWindowExiting()==0) //todo: test this code. I think it enters an invalid state
-    {
-      sendstringf("NMI handling: failed to set PBEF_NMI_WINDOW_EXITING.  Raising NMI like a retard\n");
-      cpuinfo->NMIOccured=2;
-    }
-    */
-
-    return 0;
-  }
-
-  sendstringf("Checking if it was an expected interrupt\n\r");
-
-  if (cpuinfo->OnException[0].RIP)
-  {
-    nosendchar[thisAPICID]=0;
-
-    sendstringf("OnException is set. Passing it to longjmp\n");  //no need to set rflags back, the original state contains that info
-    cpuinfo->LastExceptionRIP=stack[16+errorcode];
-    longjmp(cpuinfo->OnException, 0x100 | intnr);
-
-    sendstringf("longjmp just went through...\n");
-    while (1);
-  }
-
-  if (cpuinfo->OnInterrupt.RIP)
-  {
-    QWORD oldrip=stack[16+errorcode];
-    sendstringf("Yes, OnInterrupt is set to %x\n\r",cpuinfo->OnInterrupt);
-
-    stack[8+errorcode]=(QWORD)(cpuinfo->OnInterrupt.RBP);
-    stack[16+errorcode]=(QWORD)(cpuinfo->OnInterrupt.RIP);
-    stack[19+errorcode]=(QWORD)(cpuinfo->OnInterrupt.RSP);
-
-    rflags->IF=0; //disable the IF flag in the eflags register stored on the stack (when called during checks if an int was pending)
-
-
-    cpuinfo->LastInterrupt=(unsigned char)intnr;
-    if (errorcode)
-    {
-      cpuinfo->LastInterruptHasErrorcode=1;
-      cpuinfo->LastInterruptErrorcode=(WORD)stack[16];
-    }
-    cpuinfo->LastInterruptHasErrorcode=0;
-
-    cpuinfo->OnInterrupt.RIP=0; //clear exception handler
-    cpuinfo->OnInterrupt.RBP=0;
-    cpuinfo->OnInterrupt.RSP=0;
-
-    sendstringf("changed rip(was %6 is now %6)\n\r", oldrip, stack[16+errorcode]);
-    sendstringf("rflags upon return is %x\n\r", stack[16+2+errorcode]);
-
-    sendstring("returning now\n");
-
-    return errorcode;
-  }
-  sendstring("not expected\n\r");
-
-
-
-  sendstring("Status:\n\r");
-  sendstringf("r15=%6\n\r",stack[0]);
-  sendstringf("r14=%6\n\r",stack[1]);
-  sendstringf("r13=%6\n\r",stack[2]);
-  sendstringf("r12=%6\n\r",stack[3]);
-  sendstringf("r11=%6\n\r",stack[4]);
-  sendstringf("r10=%6\n\r",stack[5]);
-  sendstringf("r9=%6\n\r",stack[6]);
-  sendstringf("r8=%6\n\r",stack[7]);
-  sendstringf("rbp=%6\n\r",stack[8]);
-  sendstringf("rsi=%6\n\r",stack[9]);
-  sendstringf("rdi=%6\n\r",stack[10]);
-  sendstringf("rdx=%6\n\r",stack[11]);
-  sendstringf("rcx=%6\n\r",stack[12]);
-  sendstringf("rbx=%6\n\r",stack[13]);
-  sendstringf("rax=%6\n\r",stack[14]);
-  sendstringf("intnr=%6\n\r",stack[15]);
-  sendstringf("stack[16]=%6\n\r",stack[16]);
-  sendstringf("stack[17]=%6\n\r",stack[17]);
-  sendstringf("stack[18]=%6\n\r",stack[18]);
-  sendstringf("stack[19]=%6\n\r",stack[19]);
-  sendstringf("--------------\n\r");
-
-  sendstringf("DR6=%6\n\r",getDR6());
-  if (intnr==14)
-  {
-    sendstringf("DR2=%6\n\r",getDR2());
-  }
-  //16=errorcode/eip
-  //17=eip/cs
-  //18=cs/eflags
-
-	sendstringf("eip=%6\n\r",stack[16+errorcode]);
-	sendstringf("cs=%6\n\r",stack[17+errorcode]);
-
-
-
-
-  sendDissectedFlags(rflags);
-
-  sendstringf("Trying to disassemble caller instruction\n\r");
-
-  int found=0;
-  unsigned int used=0;
-  unsigned int start=0;
-  _DecodedInst disassembled[22];
-
-  while (start<30)
-  {
-    distorm_decode(stack[16+errorcode]-30+start, (unsigned char *)(stack[16+errorcode]-30+start), 120, Decode64Bits, disassembled, 22, &used);
-
-    for (i=0; (unsigned)i<used; i++)
-      if (disassembled[i].offset==stack[16+errorcode])
-      {
-        found=1;
-        break;
-      }
-
-    if (found)
-      break;
-    start++;
-  }
-
-  for (i=0; (unsigned)i<used; i++)
-  {
-    if (disassembled[i].offset==stack[16+errorcode])
-    {
-      sendstringf(">>");
-    }
-
-    sendstringf("%x : %s - %s %s\n\r",
-                    disassembled[i].offset,
-                    disassembled[i].instructionHex.p,
-                    disassembled[i].mnemonic.p,
-                    disassembled[i].operands.p);
-  }
-
-
-
-  autostart=0;
-  setDR7(originalDR7);
-
-
-  sendstring("End of interrupt\n\r");
-
-
-#ifdef DEBUGINTHANDLER
-
-  csEnter(&cinthandlerMenuCS);
- // inthandleroverride=1;
-  IntHandlerDebug=1;
-
-
-  unsigned char key;
-  while (1)
-  {
-    sendstring("----------------------------\n\r");
-    sendstring("Interrupt handler debug menu\n\r");
-    sendstring("----------------------------\n\r");
-    sendstring("1: Exit from interrupt\n\r");
-    sendstring("2: Check CRC values\n\r");
-    sendstring("3: Get vmstate\n\r");
-    sendstring("p: Previous vmstates\n\r");
-
-
-
-    key=waitforchar();
-    if (key==0xff) //serial port borked
-      key='1';
-
-    switch (key)
-    {
-      case '1':
-        sendstring("Exiting from interrupt\n\r");
-        IntHandlerDebug=0;
-        csLeave(&cinthandlerMenuCS);
-        return errorcode;
-
-      case '2':
-        CheckCRCValues();
-        break;
-
-      case '3':
-        sendvmstate(cpuinfo, NULL);
-        break;
-
-      case 'p':
-    	displayPreviousStates();
-        break;
-    }
-  }
-
-
-
-#else
-	return errorcode;
-#endif
-}
 
 void startNextCPU(void)
 {
@@ -472,302 +141,23 @@ void CheckCRCValues(void)
   return;
 }
 
-void setints(void)
-{
-  IDT tidt;
-  int i;
-
-  tidt.wLimit=16*256;
-  tidt.vector=intvector;
-
-  if (intvector==NULL)
-  {
-    sendstring("setints was called too early");
-    while(1);
-  }
-
-
-  zeromemory(intvector, 256*sizeof(INT_VECTOR));
-  for (i=0; i<256; i++)
-  {
-    intvector[i].wSelector=80;
-    intvector[i].bUnused=0;
-    intvector[i].bAccess=0x8e; //10001110
-  }
-
-  intvector[8].bUnused=1; //double fault
-  intvector[11].bUnused=1; //segment fault
-  intvector[12].bUnused=1; //stack fault
-
-  SETINT(0);
-  SETINT(1);
-  SETINT(2);
-  SETINT(3);
-  SETINT(4);
-  SETINT(5);
-  SETINT(6);
-  SETINT(7);
-  SETINT(8);
-  SETINT(9);
-  SETINT(10);
-  SETINT(11);
-  SETINT(12);
-  SETINT(13);
-  SETINT(14);
-  SETINT(15);
-  SETINT(16);
-  SETINT(17);
-  SETINT(18);
-  SETINT(19);
-  SETINT(20);
-  SETINT(21);
-  SETINT(22);
-  SETINT(23);
-  SETINT(24);
-  SETINT(25);
-  SETINT(26);
-  SETINT(27);
-  SETINT(28);
-  SETINT(29);
-  SETINT(30);
-  SETINT(31);
-  SETINT(32);
-  SETINT(33);
-  SETINT(34);
-  SETINT(35);
-  SETINT(36);
-  SETINT(37);
-  SETINT(38);
-  SETINT(39);
-  SETINT(40);
-  SETINT(41);
-  SETINT(42);
-  SETINT(43);
-  SETINT(44);
-  SETINT(45);
-  SETINT(46);
-  SETINT(47);
-  SETINT(48);
-  SETINT(49);
-  SETINT(50);
-  SETINT(51);
-  SETINT(52);
-  SETINT(53);
-  SETINT(54);
-  SETINT(55);
-  SETINT(56);
-  SETINT(57);
-  SETINT(58);
-  SETINT(59);
-  SETINT(60);
-  SETINT(61);
-  SETINT(62);
-  SETINT(63);
-  SETINT(64);
-  SETINT(65);
-  SETINT(66);
-  SETINT(67);
-  SETINT(68);
-  SETINT(69);
-  SETINT(70);
-  SETINT(71);
-  SETINT(72);
-  SETINT(73);
-  SETINT(74);
-  SETINT(75);
-  SETINT(76);
-  SETINT(77);
-  SETINT(78);
-  SETINT(79);
-  SETINT(80);
-  SETINT(81);
-  SETINT(82);
-  SETINT(83);
-  SETINT(84);
-  SETINT(85);
-  SETINT(86);
-  SETINT(87);
-  SETINT(88);
-  SETINT(89);
-  SETINT(90);
-  SETINT(91);
-  SETINT(92);
-  SETINT(93);
-  SETINT(94);
-  SETINT(95);
-  SETINT(96);
-  SETINT(97);
-  SETINT(98);
-  SETINT(99);
-  SETINT(100);
-  SETINT(101);
-  SETINT(102);
-  SETINT(103);
-  SETINT(104);
-  SETINT(105);
-  SETINT(106);
-  SETINT(107);
-  SETINT(108);
-  SETINT(109);
-  SETINT(110);
-  SETINT(111);
-  SETINT(112);
-  SETINT(113);
-  SETINT(114);
-  SETINT(115);
-  SETINT(116);
-  SETINT(117);
-  SETINT(118);
-  SETINT(119);
-  SETINT(120);
-  SETINT(121);
-  SETINT(122);
-  SETINT(123);
-  SETINT(124);
-  SETINT(125);
-  SETINT(126);
-  SETINT(127);
-  SETINT(128);
-  SETINT(129);
-  SETINT(130);
-  SETINT(131);
-  SETINT(132);
-  SETINT(133);
-  SETINT(134);
-  SETINT(135);
-  SETINT(136);
-  SETINT(137);
-  SETINT(138);
-  SETINT(139);
-  SETINT(140);
-  SETINT(141);
-  SETINT(142);
-  SETINT(143);
-  SETINT(144);
-  SETINT(145);
-  SETINT(146);
-  SETINT(147);
-  SETINT(148);
-  SETINT(149);
-  SETINT(150);
-  SETINT(151);
-  SETINT(152);
-  SETINT(153);
-  SETINT(154);
-  SETINT(155);
-  SETINT(156);
-  SETINT(157);
-  SETINT(158);
-  SETINT(159);
-  SETINT(160);
-  SETINT(161);
-  SETINT(162);
-  SETINT(163);
-  SETINT(164);
-  SETINT(165);
-  SETINT(166);
-  SETINT(167);
-  SETINT(168);
-  SETINT(169);
-  SETINT(170);
-  SETINT(171);
-  SETINT(172);
-  SETINT(173);
-  SETINT(174);
-  SETINT(175);
-  SETINT(176);
-  SETINT(177);
-  SETINT(178);
-  SETINT(179);
-  SETINT(180);
-  SETINT(181);
-  SETINT(182);
-  SETINT(183);
-  SETINT(184);
-  SETINT(185);
-  SETINT(186);
-  SETINT(187);
-  SETINT(188);
-  SETINT(189);
-  SETINT(190);
-  SETINT(191);
-  SETINT(192);
-  SETINT(193);
-  SETINT(194);
-  SETINT(195);
-  SETINT(196);
-  SETINT(197);
-  SETINT(198);
-  SETINT(199);
-  SETINT(200);
-  SETINT(201);
-  SETINT(202);
-  SETINT(203);
-  SETINT(204);
-  SETINT(205);
-  SETINT(206);
-  SETINT(207);
-  SETINT(208);
-  SETINT(209);
-  SETINT(210);
-  SETINT(211);
-  SETINT(212);
-  SETINT(213);
-  SETINT(214);
-  SETINT(215);
-  SETINT(216);
-  SETINT(217);
-  SETINT(218);
-  SETINT(219);
-  SETINT(220);
-  SETINT(221);
-  SETINT(222);
-  SETINT(223);
-  SETINT(224);
-  SETINT(225);
-  SETINT(226);
-  SETINT(227);
-  SETINT(228);
-  SETINT(229);
-  SETINT(230);
-  SETINT(231);
-  SETINT(232);
-  SETINT(233);
-  SETINT(234);
-  SETINT(235);
-  SETINT(236);
-  SETINT(237);
-  SETINT(238);
-  SETINT(239);
-  SETINT(240);
-  SETINT(241);
-  SETINT(242);
-  SETINT(243);
-  SETINT(244);
-  SETINT(245);
-  SETINT(246);
-  SETINT(247);
-  SETINT(248);
-  SETINT(249);
-  SETINT(250);
-  SETINT(251);
-  SETINT(252);
-  SETINT(253);
-  SETINT(254);
-  SETINT(255);
-
-  cLIDT(&tidt);
-}
 
 
 void vmm_entry2_hlt(pcpuinfo currentcpuinfo)
 {
   UINT64 a,b,c,d;
+
+  nosendchar[getAPICID()]=0;
+
   if (currentcpuinfo)
     sendstringf("CPU %d : Terminating...\n\r",currentcpuinfo->cpunr);
+  else
+    sendstringf("Unknown(%d) terminating...", getcpunr() );
 
   while (1)
   {
+    ddDrawRectangle(0,DDVerticalResolution-100,100,100,0xff0000);
+
     if (currentcpuinfo)
       currentcpuinfo->active=0;
     a=1;
@@ -868,13 +258,13 @@ void vmm_entry2(void)
     vmm_entry2_hlt(cpuinfo);
   }
 
-
-  startvmx(cpuinfo);
-
-   // while (1); //debug
+  sendstringf("Starting VMX for cpu %d\n", cpunr);
 
   displayline("CPU CORE %d: entering VMX mode\n",cpunr);
 
+  startvmx(cpuinfo);
+
+  nosendchar[getAPICID()]=0;
   sendstringf("Application cpu returned from startvmx\n\r");
 
   vmm_entry2_hlt(cpuinfo);
@@ -888,16 +278,23 @@ void vmm_entry2(void)
 void vmm_entry(void)
 {
   //make sure WP is on
+  enableserial();
+
+  sendstringf("vmm_entry\n");
+
   setCR0(getCR0() | CR0_WP);
+  writeMSR(EFER_MSR, readMSR(EFER_MSR) | (1<<11)); //no execute
+  //setCR4(getCR4() | CR4_SMEP);
 
   if (isAP)
   {
     vmm_entry2();
+
+    nosendchar[getAPICID()]=0;
     sendstringf("vmm_entry2 has PHAILED!!!!");
-    while (1);
+    while (1) outportb(0x80,0xc7);
   }
   isAP=1; //all other entries will be an AP
-
 
   initializedCPUCount=1; //I managed to run this at least...
 
@@ -911,6 +308,7 @@ void vmm_entry(void)
 
   Password1=0x76543210; //later to be filled in by user, sector on disk, or at compile time
   Password2=0xfedcba98;
+  Password3=0x90909090;
 
   /*version 1 was the 32-bit only version,
    * 2 added 64-bit,
@@ -926,8 +324,11 @@ void vmm_entry(void)
    * 11=new memory manager , dynamic cpu initialization, UEFI boot support, EPT, unrestricted support, and other new features
    * 12=vpid
    * 13=basic TSC emulation
+   * 14=properly emulate debug step
+   * 15=some amd fixes/contiguous memory param/dbvmbp
+   * 16=3th vmcall password
    */
-  dbvmversion=13;
+  dbvmversion=16;
   int1redirection=1; //redirect to int vector 1 (might change this to the perfcounter interrupt in the future so I don't have to deal with interrupt prologue/epilogue)
   int3redirection=3;
   int14redirection=14;
@@ -945,9 +346,9 @@ void vmm_entry(void)
   MAXPHYADDRMASK=~(MAXPHYADDRMASK << MAXPHYADDR); //<< 36 = 0xfffffff000000000 .  after inverse : 0x0000000fffffffff
   MAXPHYADDRMASKPB=MAXPHYADDRMASK & 0xfffffffffffff000ULL; //0x0000000ffffff000
 
-  sendstringf("MAXPHYADDR=%d", MAXPHYADDR);
-  sendstringf("MAXPHYADDRMASK=%6", MAXPHYADDRMASK);
-  sendstringf("MAXPHYADDRMASKPB=%6", MAXPHYADDRMASK);
+  sendstringf("MAXPHYADDR=%d\n", MAXPHYADDR);
+  sendstringf("MAXPHYADDRMASK=%6\n", MAXPHYADDRMASK);
+  sendstringf("MAXPHYADDRMASKPB=%6\n", MAXPHYADDRMASKPB);
 
 
 
@@ -1049,6 +450,7 @@ void vmm_entry(void)
   cpu_familyID=cpu_familyID + (cpu_ext_familyID << 4);
 
 
+ // if (0)
   if (1) //((d & (1<<28))>0) //this doesn't work in vmware, so find a different method
   {
     QWORD entrypage=0x30000;
@@ -1084,7 +486,9 @@ void vmm_entry(void)
       sendstringf("original->cpucount=%d\n", original->cpucount);
       if (original->cpucount>1000)
       {
+        nosendchar[getAPICID()]=0;
         sendstringf("More than 1000 cpu\'s are currently not supported\n");
+        ddDrawRectangle(0,DDVerticalResolution-100,100,100,0xff0000);
         while (1);
       }
 
@@ -1094,6 +498,60 @@ void vmm_entry(void)
         foundcpus=original->cpucount;
         APStartsInSIPI=0; //AP should start according to the original state
       }
+
+      if (original->FrameBufferBase)
+      {
+        DDFrameBufferBase=original->FrameBufferBase;
+        DDFrameBufferSize=original->FrameBufferSize;
+        DDHorizontalResolution=original->HorizontalResolution;
+        DDVerticalResolution=original->VerticalResolution;
+        DDPixelsPerScanLine=original->PixelsPerScanLine;
+
+        if (DDFrameBufferBase)
+        {
+          /*
+          char c=0;
+          sendstring("Before mapping of the framebuffer\n");
+          while (c==0)
+          {
+            c=waitforchar();
+          }
+          sendstring("Mapping framebuffer\n");*/
+
+          //DDFrameBuffer=mapPhysicalMemoryGlobal(0x90000000, 8294400);
+          //DDFrameBuffer=(unsigned char *)mapPhysicalMemory(0x90000000, 8294400);
+
+
+          DDFrameBuffer=(unsigned char *)mapPhysicalMemoryGlobal(DDFrameBufferBase, DDFrameBufferSize);
+          if (DDFrameBuffer==NULL)
+          {
+            sendstring("Failure mapping memory");
+          }
+          else
+          {
+
+
+
+         /* SetPageToWriteThrough(DDFrameBuffer);*/
+            ddDrawRectangle(0,0,DDHorizontalResolution, DDVerticalResolution,0x00ff00);
+        /*    ddDrawRectangle(0,0,100,100,0xff00ff);
+            ddDrawRectangle(DDHorizontalResolution-100,0,100,100,0xff0000);
+            ddDrawRectangle(0,DDVerticalResolution-100,100,100,0x0000ff);
+            ddDrawRectangle(DDHorizontalResolution-100,DDVerticalResolution-100,100,100,0xffffff);*/
+
+/*
+            unsigned int pi;
+            for (pi=0; pi<DDFrameBufferSize; pi++)
+            {
+              DDFrameBuffer[pi]=0x30;
+            }*/
+          }
+
+        }
+      }
+
+
+      //while (1) ;
       unmapPhysicalMemory(original, sizeof(OriginalState));
     }
 
@@ -1167,8 +625,10 @@ void vmm_entry(void)
 
   if (GDT_BASE==NULL)
   {
+    nosendchar[getAPICID()]=0;
     sendstring("Memory allocation failed\n");
-    while (1) ;
+    ddDrawRectangle(0,DDVerticalResolution-100,100,100,0xff0000);
+    while (1) outportb(0x80,0xc8);
   }
 
   sendstringf("Allocated GDT_BASE %6\n", GDT_BASE);
@@ -1227,13 +687,45 @@ BPTest:
   asm volatile ("": : :"memory");
 AfterBPTest:
   if (i==0)
-    sendstring("BPTest successfull\n");
+    sendstringf("BPTest success.  dr6=%6\n", getDR6());
   else
     sendstring(":(\n");
 
   cpuinfo->OnInterrupt.RSP=0;
   cpuinfo->OnInterrupt.RBP=0;
   cpuinfo->OnInterrupt.RIP=0;
+
+  try
+  {
+    sendstring("Trying memory access BP\n");
+
+    regDR7 dr7;
+    dr7.DR7=getDR7();
+
+    dr7.L1=1;
+    dr7.G1=1;
+    dr7.RW1=3;
+    dr7.LEN1=3;
+
+    setDR7(dr7.DR7);
+    setDR1((QWORD)((volatile void *)&debugtestvar));
+
+    setDR6(0xffffffff);
+    sendstringf("Before access DR6=%6\n",getDR6());
+    asm volatile ("": : :"memory");
+    debugtestvar=0;
+    debugtestvar=890;
+    asm volatile ("": : :"memory");
+
+    sendstringf("Memory access BP failure\n DR1=%6 DR7=%6", getDR1(), getDR7());
+
+  }
+  except
+  {
+    sendstringf("Except block success.  dr6=%6\n", getDR6());
+  }
+  tryend
+
 
 
 
@@ -1352,12 +844,15 @@ AfterBPTest:
     if ((b==0x68747541) && (d==0x69746e65) && (c==0x444d4163))
     {
       isAMD=1;
+      vmcall_instr=vmcall_amd;
       AMD_hasDecodeAssists=0;
       sendstring("This is an AMD system. going to use the AMD virtualization tech\n\r");
     }
     else
+    {
       isAMD=0;
-
+      vmcall_instr=vmcall_intel;
+    }
 
     //a=0x80000000; _cpuid(&a,&b,&c,&d);
     //if (!(a & 0x80000000))
@@ -1542,6 +1037,7 @@ AfterBPTest:
 
   InitExports();
 
+  //outportb(0x80,0x10);
 
   menu2();
   return;
@@ -1592,6 +1088,21 @@ void vmcalltest(void)
 //#pragma GCC pop_options
 
 
+void apentryvmx()
+{
+  nosendchar[getAPICID()]=0;
+ // sendstringf("Hello from %d", getAPICID());
+
+  while (1)
+  {
+   // sendchar("-");
+    QWORD eax,ebx,ecx,edx;
+    _cpuid(&eax,&ebx,&ecx,&edx);
+
+
+  }
+
+}
 
 void reboot(int skipAPTerminationWait)
 {
@@ -1665,10 +1176,7 @@ void menu2(void)
 {
   unsigned char key;
 
-  if (isAMD)
-    vmcall_instr=vmcall_amd;
-  else
-    vmcall_instr=vmcall_intel;
+
 
 
 
@@ -1708,16 +1216,30 @@ void menu2(void)
     displayline("9: test input\n");
     displayline("a: test branch profiling\n");
     displayline("b: boot without vm (test state vm would set)\n");
-    displayline("c: PSOD test\n");
     displayline("v: control register test\n");
     displayline("e: efer test\n");
     displayline("o: out of memory test\n");
+
+    if (getDBVMVersion())
+    {
+      displayline("w: DBVM write watch test\n");
+      displayline("r: DBVM write read/write test\n");
+      displayline("x: DBVM write execute test\n");
+      displayline("c: DBVM cloak test\n");
+      displayline("m: DBVM changeregonbp test\n");
+    }
+
 
     key=0;
     while (!key)
     {
       if ((!loadedOS) || (showfirstmenu))
       {
+#ifdef DELAYEDSERIAL
+        if (!useserial)
+          key='0';
+        else
+#endif
         if (loadedOS)
           key=waitforchar();
         else
@@ -1853,10 +1375,10 @@ void menu2(void)
             i->OnInterrupt.RBP=getRBP();
             i->OnInterrupt.RIP=(QWORD)((volatile void *)&&afterGDtest);
             asm volatile ("": : :"memory");
-            setDR6(0xfffffff0);
+            setDR6(0xffffffff);
             setDR7(getDR7() | (1<<13));
             asm volatile ("": : :"memory");
-            setDR6(0xffff0ff0);
+            setDR3(0x12345678);
 
             sendstringf("Failure to break on GD");
 
@@ -1864,6 +1386,7 @@ void menu2(void)
 afterGDtest:
 
             //RF
+            sendstringf("After GD test. DR6=%6\n", getDR6());
 
 
             displayline("Setting an execute breakpoint\n\r");
@@ -1901,11 +1424,12 @@ afterWRBPtest:
             displayline("done writing\n");
 
 
-            displayline("Setting the single step flag (this will give exceptions)\n\r");
+            displayline("Setting the single step flag (this will give unhandled exceptions)\n\r");
             rflags=getRFLAGS(); //NO RF
             setRFLAGS(rflags | (1<<8));
 
             setRFLAGS(rflags & (~(1<<8))); //unset
+
 
             break;
           }
@@ -2007,13 +1531,6 @@ afterWRBPtest:
             break;
           }
 
-          case 'c':
-          {
-            psod();
-            displayline("WTF?\n");
-            break;
-          }
-
           case 'e':
           {
             QWORD old=readMSR(EFER_MSR);
@@ -2109,6 +1626,37 @@ afterWRBPtest:
             break;
           }
 
+          case 'w':
+          {
+            dbvm_watch_writes_test();
+            break;
+          }
+
+          case 'r':
+          {
+            dbvm_watch_reads_test();
+            break;
+          }
+
+          case 'x':
+          {
+            dbvm_watch_execute_test();
+            break;
+          }
+
+          case 'c':
+          {
+            dbvm_cloak_test();
+            break;
+          }
+
+          case 'm':
+          {
+            dbvm_changeregonbp_test();
+            break;
+          }
+
+
           default:
             key=0;
             break;
@@ -2150,6 +1698,7 @@ void *lalloc (void *ud, void *ptr, size_t osize, size_t nsize) {
 
 void menu(void)
 {
+  //outportb(0x80,0x11);
   displayline("menu\n\r"); //debug to find out why the vm completely freezes when SERIALPORT==0
 
   sendstring("menu\n\r");
@@ -2199,6 +1748,11 @@ void menu(void)
       displayline("Waiting for serial port command:\n");
       sendstring("waiting for command:");
 
+#ifdef DELAYEDSERIAL
+      if (!useserial)
+        command='0';
+      else
+#endif
       if (loadedOS)
       {
 //        command='0';
@@ -2270,7 +1824,7 @@ void menu(void)
         }
 
         //while (1) _pause(); //debug so I only see AP cpu's
-
+        //outportb(0x80,0x12);
 
         startvmx(getcpuinfo());
         sendstring("BootCPU: Back from startvmx\n\r");
@@ -2443,8 +1997,6 @@ void menu(void)
         {
           sendstring("Entering lua console:");
           enterLuaConsole();
-
-
           break;
         }
 #endif
@@ -2502,7 +2054,7 @@ void startvmx(pcpuinfo currentcpuinfo)
 #endif
 
   UINT64 a,b,c,d;
-
+ // outportb(0x80,0x13);
 
 
   displayline("cpu %d: startvmx:\n",currentcpuinfo->cpunr);
@@ -2629,14 +2181,15 @@ void startvmx(pcpuinfo currentcpuinfo)
 
 
 
-          UINT64 VM_HSAVE_PA_MSR=readMSR(0xc0010117); //VM_HSAVE_PA MSR
-          sendstringf("VM_HSAVE_PA_MSR was %6\n", VM_HSAVE_PA_MSR);
+          UINT64 VM_HSAVE_PA_MSR_VALUE=readMSR(VM_HSAVE_PA_MSR); //VM_HSAVE_PA MSR
+          sendstringf("VM_HSAVE_PA_MSR was %6\n", VM_HSAVE_PA_MSR_VALUE);
 
-          currentcpuinfo->vmcb_host=malloc(4096);
+          currentcpuinfo->vmcb_host=malloc(8192);
+          zeromemory(currentcpuinfo->vmcb_host,8192);
         //  bochsbp();
-          writeMSR(0xc0010117, (UINT64)VirtualToPhysical(currentcpuinfo->vmcb_host));
+          writeMSR(VM_HSAVE_PA_MSR, (UINT64)VirtualToPhysical(currentcpuinfo->vmcb_host));
 
-
+          sendstringf("VM_HSAVE_PA_MSR is %6\n", (UINT64)readMSR(VM_HSAVE_PA_MSR));
 
     		  setupVMX(currentcpuinfo);
 
@@ -2647,13 +2200,12 @@ void startvmx(pcpuinfo currentcpuinfo)
 
 
 
+
           launchVMX(currentcpuinfo);
 
+          nosendchar[getAPICID()]=0;
           sendstring("launchVMX returned\n");
-          while (1)
-          {
-
-          }
+          while (1) outportb(0x80,0xc9);
 
 
     	  }
@@ -2742,8 +2294,10 @@ void startvmx(pcpuinfo currentcpuinfo)
 
         if (currentcpuinfo->vmxon_region==NULL)
         {
+          nosendchar[getAPICID()]=0;
           sendstringf(">>>>>>>>>>>>>>>>>>>>vmxon allocation has failed<<<<<<<<<<<<<<<<<<<<<<<<<<\n");
-          while (1);
+          ddDrawRectangle(0,DDVerticalResolution-100,100,100,0xff0000);
+          while (1) outportb(0x80,0xca);
         }
 
         zeromemory(currentcpuinfo->vmxon_region,4096);
@@ -2756,8 +2310,10 @@ void startvmx(pcpuinfo currentcpuinfo)
 
         if (currentcpuinfo->vmcs_region==NULL)
         {
+          nosendchar[getAPICID()]=0;
+          ddDrawRectangle(0,DDVerticalResolution-100,100,100,0xff0000);
           sendstringf(">>>>>>>>>>>>>>>>>>>>vmcs_region allocation has failed<<<<<<<<<<<<<<<<<<<<<<<<<<\n");
-          while (1);
+          while (1) outportb(0x80,0xcb);
         }
 
 
@@ -2818,6 +2374,8 @@ void startvmx(pcpuinfo currentcpuinfo)
               //vmptrld(VirtualToPhysical(currentcpuinfo->vmcs_region));
 
               launchVMX(currentcpuinfo);
+
+              ddDrawRectangle(0,DDVerticalResolution-100,100,100,0xff0000);
 
               displayline("Exit from launchVMX, if you see this, something horrible has happened\n");
               sendstring("Exit from launchVMX\n\r");
@@ -2884,6 +2442,8 @@ void startvmx(pcpuinfo currentcpuinfo)
 #ifdef DEBUG
   sendstringf("End of startvmx (entryrsp=%6, returnrsp=%6)\n\r",entryrsp,getRSP());
 #endif
+
+  ddDrawRectangle(0,DDVerticalResolution-100,100,100,0x00ffff);
 
   if (currentcpuinfo->cpunr==0)
     displayline("bye...\n");

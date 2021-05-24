@@ -6,6 +6,18 @@ unit pointerscannerfrm;
 
 interface
 
+{$ifdef darwin}
+uses
+  macport, macportdefines, LCLIntf, lmessages, LResources, Messages, SysUtils, Variants,
+  Classes, Graphics, Controls, Forms, Dialogs, StdCtrls, ExtCtrls, ComCtrls,
+  syncobjs, syncobjs2, Menus, math, frmRescanPointerUnit, pointervaluelist,
+  rescanhelper, VirtualMemory, symbolhandler, MainUnit, disassembler,
+  CEFuncProc, NewKernelHandler, ValueFinder, PointerscanresultReader, maps,
+  zstream, Sockets, registry, PageMap, CELazySocket,
+  PointerscanNetworkCommands, resolve, pointeraddresslist, pointerscanworker,
+  PointerscanStructures, PointerscanController, sqlite3conn, sqldb,
+  frmSelectionlistunit, baseunix, commonTypeDefs;
+{$else}
 uses
   windows, LCLIntf, LResources, Messages, SysUtils, Variants, Classes, Graphics,
   Controls, Forms, Dialogs, StdCtrls, ExtCtrls, ComCtrls, syncobjs, syncobjs2,
@@ -15,8 +27,9 @@ uses
   WinSock2, Sockets, registry, PageMap, CELazySocket,
   PointerscanNetworkCommands, resolve, pointeraddresslist, pointerscanworker,
   PointerscanStructures, PointerscanController, sqlite3conn, sqldb,
-  frmSelectionlistunit, commonTypeDefs;
+  frmSelectionlistunit, commonTypeDefs, betterControls;
 
+{$endif}
 
 
 const staticscanner_done=wm_user+1;
@@ -358,11 +371,11 @@ type
 implementation
 
 
-uses PointerscannerSettingsFrm, frmMemoryAllocHandlerUnit, frmSortPointerlistUnit,
-  LuaHandler, lauxlib, lua, frmPointerscanConnectDialogUnit,
-  frmpointerrescanconnectdialogunit, frmMergePointerscanResultSettingsUnit,
-  ProcessHandlerUnit, frmResumePointerscanUnit, PointerscanConnector,
-  frmSetupPSNNodeUnit, PointerscanNetworkStructures, parsers, byteinterpreter,
+uses PointerscannerSettingsFrm, {$ifdef windows}frmMemoryAllocHandlerUnit,frmSortPointerlistUnit, {$endif}
+  LuaHandler, lauxlib, lua, {$ifdef windows}frmPointerscanConnectDialogUnit,
+  frmpointerrescanconnectdialogunit, frmMergePointerscanResultSettingsUnit,  {$endif}
+  ProcessHandlerUnit, {$ifdef windows}frmResumePointerscanUnit,{$endif} PointerscanConnector,
+  {$ifdef windows}frmSetupPSNNodeUnit,{$endif} PointerscanNetworkStructures, parsers, byteinterpreter,
   CustomTypeHandler, ceregistry, vartypestrings;
 
 resourcestring
@@ -412,6 +425,7 @@ resourcestring
   rsPSExportAborted = 'Export aborted';
   rsPSImporting = 'Importing...';
   rsPSImporting_sortOrNot = 'Do you wish to sort pointerlist by level, then module, then offsets?';
+  rsPSImporting_sortMethod = 'Do you wish to use offsets sum for sorting?';
   rsPSStatistics = 'Statistics';
   rsPSUniquePointervaluesInTarget = 'Unique pointervalues in target:';
   rsPSScanDuration = 'Scan duration: ';
@@ -506,8 +520,10 @@ procedure Tfrmpointerscanner.m_staticscanner_done(var message: tmessage);
 begin
   if staticscanner=nil then exit;
 
+  {$ifdef windows}
   if staticscanner.useHeapData then
     frmMemoryAllocHandler.memrecCS.leave;  //continue adding new entries
+  {$endif}
 
   //update the treeview
   if staticscanner.haserror then
@@ -699,6 +715,7 @@ begin
 end;
 
 procedure Tfrmpointerscanner.miResumeClick(Sender: TObject);
+{$ifdef windows}
 var
   f: tfrmresumePointerScan;
   filename: string;
@@ -762,9 +779,10 @@ var
 
   pb: TProgressbar;
   lb: TLabel;
-
+{$endif}
 
 begin
+  {$ifdef windows}
   //show a dialog where the user can pick the number of threads to scan
   if (pointerscanresults<>nil) and Pointerscanresults.CanResume then
   begin
@@ -944,7 +962,7 @@ begin
   end
   else
     miResume.Visible:=false;
-
+  {$endif}
 end;
 
 procedure Tfrmpointerscanner.Method3Fastspeedandaveragememoryusage1Click(
@@ -1166,9 +1184,10 @@ begin
       staticscanner.useHeapData:=frmpointerscannersettings.cbUseHeapData.Checked;
       staticscanner.useOnlyHeapData:=frmpointerscannersettings.cbHeapOnly.checked;
 
-
+       {$ifdef windows}
       if staticscanner.useHeapData then
         frmMemoryAllocHandler.memrecCS.enter; //stop adding entries to the list
+       {$endif}
 
       //check if the user choose to scan for addresses or for values
       staticscanner.findValueInsteadOfAddress:=frmpointerscannersettings.rbFindValue.checked;
@@ -1374,7 +1393,7 @@ begin
       	                      '  PRIMARY KEY(ptrid,offsetnr)'+
                               ');');
 
-        sqlite3.ExecuteDirect('CREATE UNIQUE INDEX "ptrid_idx" ON pointerfiles_endwithoffsetlist( "ptrid" );');
+        sqlite3.ExecuteDirect('CREATE INDEX "ptrid_idx" ON pointerfiles_endwithoffsetlist( "ptrid" );');
       end;
 
 
@@ -1396,7 +1415,7 @@ begin
        if messagedlg(rsPSExportToDatabaseBiggerSizeOrNot, mtConfirmation, [mbyes, mbno], 0) = mryes then
         begin
           sqlite3.ExecuteDirect('create table results(ptrid integer not null, resultid integer, offsetcount integer, moduleid integer, moduleoffset integer '+offsetlist+', primary key (ptrid, resultid) );');
-          sqlite3.ExecuteDirect('CREATE UNIQUE INDEX "ptr_res_id_idx" ON "results"( ptrid, resultid );');
+          sqlite3.ExecuteDirect('CREATE INDEX "ptr_res_id_idx" ON "results"( ptrid, resultid );');
           sqlite3.ExecuteDirect('CREATE INDEX "modid_modoff_idx" ON "results"( moduleid, moduleoffset );');
         end
         else
@@ -1485,23 +1504,19 @@ begin
         BaseScanRange:='NULL';
 
       s:='INSERT INTO pointerfiles (name, maxlevel, compressedptr, unalligned, MaxBitCountModuleIndex, MaxBitCountModuleOffset, MaxBitCountLevel, MaxBitCountOffset, DidBaseRangeScan, BaseScanRange) values ("'+name+'", '+maxlevel+','+compressedptr+','+unalligned+','+MaxBitCountModuleIndex+','+MaxBitCountModuleOffset+','+MaxBitCountLevel+','+MaxBitCountOffset+','+DidBaseRangeScan+','+BaseScanRange+')';
-
       sqlite3.ExecuteDirect(s);
+
+
+      SQLQuery.SQL.Text:='Select max(ptrid) as max from pointerfiles';
+      SQLQuery.Active:=true;
+      ptrid:=SQLQuery.FieldByName('max').AsString;
+      SQLQuery.active:=false;
+
       for i:=0 to Pointerscanresults.EndsWithOffsetListCount-1 do
       begin
         s:='INSERT INTO pointerfiles_endwithoffsetlist (ptrid, offsetnr, offsetvalue) values ("'+ptrid+'", '+inttostr(i)+','+inttostr(Pointerscanresults.EndsWithOffsetList[i])+')';
         sqlite3.ExecuteDirect(s);
       end;
-
-
-
-      SQLQuery.SQL.Text:='Select max(ptrid) as max from pointerfiles';
-      SQLQuery.Active:=true;
-
-      ptrid:=SQLQuery.FieldByName('max').AsString;
-
-      SQLQuery.active:=false;
-
 
       for i:=0 to Pointerscanresults.modulelistCount-1 do
         sqlite3.ExecuteDirect('INSERT INTO modules(ptrid, moduleid, name) values ('+ptrid+','+inttostr(i)+',"'+Pointerscanresults.getModulename(i)+'")');
@@ -1517,10 +1532,10 @@ begin
         offsetvalues:='';
         p:=Pointerscanresults.getPointer(j);
 
-        for i:=1 to p.offsetcount do
+        for i:=1 to p.offsetcount-Pointerscanresults.EndsWithOffsetListCount do
         begin
           offsetlist:=offsetlist+',offset'+inttostr(i);
-          offsetvalues:=offsetvalues+','+inttostr(p.offsets[i-1]);
+          offsetvalues:=offsetvalues+','+inttostr(p.offsets[i-1+Pointerscanresults.EndsWithOffsetListCount]);
         end;
 
         if resultidcolumnsave then
@@ -1533,7 +1548,7 @@ begin
         if j mod 50=0 then
         begin
           progressbar1.position:=ceil(j / Pointerscanresults.count * 100);
-          progressbar1.Update;
+          application.ProcessMessages;
         end;
         inc(j);
       end;
@@ -1795,10 +1810,18 @@ begin
 
 
     offsetlist:='';
-    for i:=1 to maxlevel do offsetlist:=offsetlist+', offset'+inttostr(i);
 
     if messagedlg(rsPSImporting_sortOrNot, mtConfirmation, [mbyes, mbno], 0) = mryes then
-      sqlquery.sql.text:='select * from results where ptrid='+ptrid+' order by offsetcount, moduleid'+offsetlist
+      if messagedlg(rsPSImporting_sortMethod, mtConfirmation, [mbyes, mbno], 0) = mryes then
+      begin
+        for i:=maxlevel downto 1 do offsetlist:=offsetlist+'+ coalesce(offset'+inttostr(i)+',0)';
+        sqlquery.sql.text:='select *,(0'+offsetlist+') as suma from results where ptrid='+ptrid+' order by offsetcount, suma, moduleid';
+      end
+      else
+      begin
+        for i:=maxlevel downto 1 do offsetlist:=offsetlist+', offset'+inttostr(i);
+        sqlquery.sql.text:='select * from results where ptrid='+ptrid+' order by offsetcount, moduleid'+offsetlist;
+      end
     else
       sqlquery.sql.text:='select * from results where ptrid='+ptrid;
 
@@ -1885,7 +1908,7 @@ begin
         if importedcount mod 25=0 then
         begin
           progressbar1.Position:=ceil(importedcount/totalcount*100);
-          progressbar1.update;
+          application.ProcessMessages;
         end;
       end;
     finally
@@ -1910,8 +1933,11 @@ begin
 end;
 
 procedure Tfrmpointerscanner.miCreatePSNnodeClick(Sender: TObject);
+{$ifdef windows}
 var f: TfrmSetupPSNNode;
+  {$endif}
 begin
+  {$ifdef windows}
   f:=TfrmSetupPSNNode.Create(self);
   if f.showmodal=mrok then
   begin
@@ -1961,6 +1987,7 @@ begin
   end;
 
   f.free;
+  {$endif}
 end;
 
 procedure Tfrmpointerscanner.miInfoPopupPopup(Sender: TObject);
@@ -2105,6 +2132,7 @@ end;
 
 procedure Tfrmpointerscanner.lvResultsColumnClick(Sender: TObject; Column: TListColumn);
 //Using dark byte's super secret "Screw this, I'll just split it into chunks" algorithm
+{$ifdef windows}
 var
   c: integer;
   frmSortPointerlist: TfrmSortPointerlist;
@@ -2117,7 +2145,10 @@ var
   newname: string;
   i: integer;
   s: string;
+  {$endif}
 begin
+
+  {$ifdef windows}
   c:=column.index;
   if c=lvResults.ColumnCount-1 then exit; //raise exception.create('The result/value list is unsortable');
   if Pointerscanresults.count<=1 then exit; //don't even bother
@@ -2157,6 +2188,7 @@ begin
   oldlist.free;
 
   frmSortPointerlist.free;
+  {$endif}
 end;
 
 procedure Tfrmpointerscanner.Timer2Timer(Sender: TObject);
@@ -2807,50 +2839,55 @@ begin
               if filterOutAccessible and rangeAndStartOffsetsEndOffsets_Valid then
                 valid:=not valid;
 
+
+
               if (not filterOutAccessible) and valid then
               begin
-                if novaluecheck or forvalue then
+                if pointermap=nil then //if no pointermap is used, check the value or at least if it's readable
                 begin
-                  //evaluate the address (address must be accessible)
-                  if rescanhelper.ispointer(address) then
+                  if novaluecheck or forvalue then
                   begin
-
-                    if novaluecheck=false then //check if the value is correct
+                    //evaluate the address (address must be accessible)
+                    if rescanhelper.ispointer(address) then
                     begin
 
-                      value:=nil;
-                      pi:=rescanhelper.FindPage(address shr 12);
-                      if pi.data<>nil then
+                      if novaluecheck=false then //check if the value is correct
                       begin
-                        i:=address and $fff;
-                        j:=min(valuesize, 4096-i);
 
-                        copymemory(tempvalue, @pi.data[i], j);
-
-                        if j<valuesize then
+                        value:=nil;
+                        pi:=rescanhelper.FindPage(address shr 12);
+                        if pi.data<>nil then
                         begin
-                          pi:=rescanhelper.FindPage((address shr 12)+1);
-                          if pi.data<>nil then
-                            copymemory(pointer(ptruint(tempvalue)+j), @pi.data[0], valuesize-j)
-                          else
-                            valid:=false;
-                        end;
-                      end
-                      else
-                        valid:=false;
+                          i:=address and $fff;
+                          j:=min(valuesize, 4096-i);
 
-                      value:=tempvalue;
+                          copymemory(tempvalue, @pi.data[i], j);
 
-                      if (not valid) or (value=nil) or (not isMatchToValue(value)) then
-                        valid:=false; //invalid value
-                    end;
-                  end else valid:=false; //unreadable address
-                end
-                else
-                begin
-                  //check if the address matches
-                  if address<>PointerAddressToFind then
-                    valid:=false;
+                          if j<valuesize then
+                          begin
+                            pi:=rescanhelper.FindPage((address shr 12)+1);
+                            if pi.data<>nil then
+                              copymemory(pointer(ptruint(tempvalue)+j), @pi.data[0], valuesize-j)
+                            else
+                              valid:=false;
+                          end;
+                        end
+                        else
+                          valid:=false;
+
+                        value:=tempvalue;
+
+                        if (not valid) or (value=nil) or (not isMatchToValue(value)) then
+                          valid:=false; //invalid value
+                      end;
+                    end else valid:=false; //unreadable address
+                  end
+                  else
+                  begin
+                    //check if the address matches
+                    if address<>PointerAddressToFind then
+                      valid:=false;
+                  end;
                 end;
               end;
 
@@ -2947,7 +2984,7 @@ var
 
   blocksize: qword;
 
-  threadhandles: array of Thandle;
+  threadhandles: array of TThreadID;
   result: tfilestream;
 
 
@@ -2965,6 +3002,8 @@ var
   oldfiles: TStringList;
 
   ml: Tstringlist;
+
+  alldone: boolean;
 
 begin
   progressbar.Min:=0;
@@ -3077,8 +3116,7 @@ begin
 
 
 
-
-
+    {$ifdef windows}
     while WaitForMultipleObjects(rescanworkercount, @threadhandles[0], true, 250) = WAIT_TIMEOUT do      //wait
     begin
       //query all threads the number of pointers they have evaluated
@@ -3088,8 +3126,26 @@ begin
 
       progressbar.Position:=PointersEvaluated div (TotalPointersToEvaluate div 100);
     end;
+    {$else}
+    repeat
+      alldone:=true;
+      PointersEvaluated:=0;
+      for i:=0 to rescanworkercount-1 do
+      begin
+        inc(PointersEvaluated,rescanworkers[i].evaluated);
+        if rescanworkers[i].Finished=false then
+          alldone:=false;
+      end;
+
+      progressbar.Position:=PointersEvaluated div (TotalPointersToEvaluate div 100);
+      if not alldone then sleep(250);
+
+    until alldone;
+
+    {$endif}
 
     //no timeout, so finished or crashed
+
 
     //destroy workers
     for i:=0 to rescanworkercount-1 do
@@ -3779,9 +3835,11 @@ begin
         3: vtype:=vtQword;
         4: vtype:=vtSingle;
         5: vtype:=vtDouble;
+        6: vtype:=vtString;
+        7: vtype:=vtUnicodeString;
       end;
 
-      if cbtype.itemindex>=6 then
+      if cbtype.itemindex>=8 then
       begin
         vtype:=vtCustom;
         ct:=TCustomType(cbtype.Items.Objects[cbtype.itemindex]);

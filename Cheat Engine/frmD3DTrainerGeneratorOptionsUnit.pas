@@ -5,8 +5,11 @@ unit frmD3DTrainerGeneratorOptionsUnit;
 interface
 
 uses
-  windows, Classes, SysUtils, FileUtil, Forms, Controls, Graphics, Dialogs, StdCtrls,
-  ComCtrls, ExtCtrls, ExtDlgs, cefuncproc, commonTypeDefs;
+  {$ifdef windows}
+  windows,
+  {$endif}
+  Classes, SysUtils, FileUtil, Forms, Controls, Graphics, Dialogs, StdCtrls,
+  ComCtrls, ExtCtrls, ExtDlgs, cefuncproc, commonTypeDefs, betterControls;
 
 type
 
@@ -90,6 +93,10 @@ end;
 procedure TfrmD3DTrainerGeneratorOptions.FormShow(Sender: TObject);
 begin
   lblTextColor.Font.Height:=GetFontData(font.handle).height;
+
+  {$ifdef darwin}
+  close
+  {$endif}
 end;
 
 procedure TfrmD3DTrainerGeneratorOptions.Button4Click(Sender: TObject);
@@ -131,9 +138,12 @@ end;
 
 procedure TfrmD3DTrainerGeneratorOptions.btnClearClick(Sender: TObject);
 begin
+
+  {$IFDEF windows}
   zeromemory(@d3dkeys,sizeof(TKeyCombo));
   edtd3dkeys.Text:=ConvertKeyComboToString(d3dkeys);
   edtd3dkeys.SetFocus;
+  {$ENDIF}
 end;
 
 procedure TfrmD3DTrainerGeneratorOptions.Button2Click(Sender: TObject);

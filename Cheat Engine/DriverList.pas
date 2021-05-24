@@ -5,9 +5,12 @@ unit DriverList;
 interface
 
 uses
-  jwaWindows, windows, LCLIntf, Messages, SysUtils, Variants, Classes, Graphics,
-  Controls, Forms, Dialogs, StdCtrls, Menus, imagehlp, CEFuncProc,
-  NewKernelHandler, LREsources, ComCtrls, registry;
+  {$ifdef windows}
+  jwaWindows, windows, imagehlp,
+  {$endif}
+  LCLIntf, Messages, SysUtils, Variants, Classes, Graphics,
+  Controls, Forms, Dialogs, StdCtrls, Menus, CEFuncProc,
+  NewKernelHandler, LREsources, ComCtrls, registry, betterControls;
 
 resourcestring
   rsDLNothingFound = 'nothing found';
@@ -222,8 +225,11 @@ var
 begin
 
 
+  {$ifdef windows}
   if (node.level=0) and (node.count=0) then
   begin
+    tvDriverList.BeginUpdate;
+
     //get the exportlist
     getmem(p,256);
     r:=GetDeviceDriverFileNameA(node.data, p,255);
@@ -253,7 +259,10 @@ begin
       node.HasChildren:=false;
 
     freemem(p);
+
+    tvDriverList.EndUpdate;
   end;
+  {$endif}
 end;
 
 initialization

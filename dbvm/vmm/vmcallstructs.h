@@ -40,6 +40,8 @@ typedef struct
 {
   VMCALL_BASIC vmcall;
   QWORD PhysicalAddress;
+  QWORD OptionalField1; //usermode loop address for DBVMBP
+  QWORD OptionalField2; //kernelmode loop address for DBVMBP
   int Size;
   int Options; //binary.
                //  Bit 0: 0=Log RIP once. 1=Log RIP multiple times (when different registers)
@@ -69,12 +71,36 @@ typedef struct
   DWORD copied; //the number of bytes copied so far (This is a repeating instruction)
 } __attribute__((__packed__)) VMCALL_WATCH_RETRIEVELOG_PARAM, *PVMCALL_WATCH_RETRIEVELOG_PARAM;
 
+
+typedef struct
+{
+  VMCALL_BASIC vmcall;
+  QWORD results; //virtual address receiving log
+  DWORD resultsize;
+  DWORD copied; //the number of bytes copied so far (This is a repeating instruction)
+} __attribute__((__packed__)) VMCALL_TRACEONBP_RETRIEVELOG_PARAM, *PVMCALL_TRACEONBP_RETRIEVELOG_PARAM;
+
+
+
+
 typedef struct
 {
   VMCALL_BASIC vmcall;
   QWORD physicalAddress;
+  QWORD mode;
 } __attribute__((__packed__)) VMCALL_CLOAK_ACTIVATE_PARAM, *PVMCALL_CLOAK_ACTIVATE_PARAM,
                               VMCALL_CLOAK_DEACTIVATE_PARAM, *PVMCALL_CLOAK_DEACTIVATE_PARAM;
+
+typedef struct
+{
+  VMCALL_BASIC vmcall;
+  QWORD physicalAddress;
+  DWORD size;
+  DWORD whitelist_flags; //0=no whitelist...why?, 1=ip range whitelist, 2=cr3 whilelist, 3=both ip+cr3 whitelist
+  QWORD whitelist_ipfromrange;
+  QWORD whitelist_iptorange;
+  QWORD whitelist_cr3;
+} __attribute__((__packed__)) VMCALL_CLOAKEX_ACTIVATE_PARAM, *PVMCALL_CLOAKEX_ACTIVATE_PARAM;
 
 typedef struct
 {
@@ -127,6 +153,8 @@ typedef struct
     unsigned reserved : 3;
   } Flags;
 
+  QWORD changeXMM; //16 nibbles, each bit is one dword
+  QWORD changeFP;
   QWORD newRAX;
   QWORD newRBX;
   QWORD newRCX;
@@ -144,6 +172,56 @@ typedef struct
   QWORD newR13;
   QWORD newR14;
   QWORD newR15;
+
+  QWORD newFP0;
+  QWORD newFP0_H;
+  QWORD newFP1;
+  QWORD newFP1_H;
+  QWORD newFP2;
+  QWORD newFP2_H;
+  QWORD newFP3;
+  QWORD newFP3_H;
+  QWORD newFP4;
+  QWORD newFP4_H;
+  QWORD newFP5;
+  QWORD newFP5_H;
+  QWORD newFP6;
+  QWORD newFP6_H;
+  QWORD newFP7;
+  QWORD newFP7_H;
+  QWORD newXMM0;
+  QWORD newXMM0_H;
+  QWORD newXMM1;
+  QWORD newXMM1_H;
+  QWORD newXMM2;
+  QWORD newXMM2_H;
+  QWORD newXMM3;
+  QWORD newXMM3_H;
+  QWORD newXMM4;
+  QWORD newXMM4_H;
+  QWORD newXMM5;
+  QWORD newXMM5_H;
+  QWORD newXMM6;
+  QWORD newXMM6_H;
+  QWORD newXMM7;
+  QWORD newXMM7_H;
+  QWORD newXMM8;
+  QWORD newXMM8_H;
+  QWORD newXMM9;
+  QWORD newXMM9_H;
+  QWORD newXMM10;
+  QWORD newXMM10_H;
+  QWORD newXMM11;
+  QWORD newXMM11_H;
+  QWORD newXMM12;
+  QWORD newXMM12_H;
+  QWORD newXMM13;
+  QWORD newXMM13_H;
+  QWORD newXMM14;
+  QWORD newXMM14_H;
+  QWORD newXMM15;
+  QWORD newXMM15_H;
+
 } __attribute__((__packed__)) CHANGEREGONBPINFO, *PCHANGEREGONBPINFO;
 
 typedef struct
@@ -152,6 +230,48 @@ typedef struct
   QWORD physicalAddress;
   CHANGEREGONBPINFO changereginfo;
 } __attribute__((__packed__)) VMCALL_CLOAK_CHANGEREG_PARAM, *PVMCALL_CLOAK_CHANGEREG_PARAM;
+
+
+
+typedef struct
+{
+  VMCALL_BASIC vmcall;
+  QWORD physicalAddress;
+  DWORD flags;
+  //bit 0: log fpu
+  //bit 1: log stack (say goodbye to your memory)
+  //bit todo: 1=hide stepping from pushf
+  //bit todo: 1=follow interrupts, 0=do not follow interrupts
+  DWORD tracecount;
+} __attribute__((__packed__)) VMCALL_CLOAK_TRACEONBP_PARAM, *PVMCALL_CLOAK_TRACEONBP_PARAM;
+
+
+
+typedef struct
+{
+  VMCALL_BASIC vmcall;
+  DWORD count;
+  DWORD maxcount;
+} __attribute__((__packed__)) VMCALL_CLOAK_TRACEONBP_GETSTATUS_PARAM, *PVMCALL_CLOAK_TRACEONBP_GETSTATUS_PARAM;
+
+
+typedef struct
+{
+  VMCALL_BASIC vmcall;
+  int force;
+} __attribute__((__packed__)) VMCALL_CLOAK_TRACEONBP_REMOVE_PARAM, *PVMCALL_CLOAK_TRACEONBP_REMOVE_PARAM;
+
+typedef struct
+{
+  VMCALL_BASIC vmcall;
+  QWORD results;
+  QWORD resultsize;
+  QWORD copied;
+} __attribute__((__packed__)) VMCALL_CLOAK_TRACEONBP_READLOG_PARAM, *PVMCALL_CLOAK_TRACEONBP_READLOG_PARAM;
+
+
+
+
 
 typedef struct
 {
@@ -202,6 +322,8 @@ typedef struct
   int globaleventcounter[56];
 } __attribute__((__packed__)) VMCALL_GET_STATISTICS_PARAM, *PVMCALL_GET_STATISTICS_PARAM;
 #endif
+
+
 
 typedef struct
 {

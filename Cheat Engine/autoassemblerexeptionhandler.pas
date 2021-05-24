@@ -5,7 +5,13 @@ unit autoassemblerexeptionhandler;
 interface
 
 uses
-  windows, Classes, SysUtils, NewKernelHandler, Clipbrd;
+  {$ifdef darwin}
+  macport,
+  {$endif}
+  {$ifdef windows}
+  windows,
+  {$endif}
+  Classes, SysUtils, NewKernelHandler, Clipbrd, betterControls;
 
 type
   TAAExceptionInfo=record
@@ -113,6 +119,8 @@ begin
   //setList
   InitializeAutoAssemblerExceptionHandler;
 
+  {$ifdef windows}
+
   oldlist:=0;
   readprocessmemory(processhandle, pointer(listaddress), @oldlist, 8,x);
 
@@ -168,6 +176,7 @@ begin
 
   //and the parameters
   VirtualFreeEx(processhandle, params, 0, MEM_RELEASE); //(not the list, on purpose)
+  {$endif}
 end;
 
 procedure InitializeAutoAssemblerExceptionHandler;
@@ -179,11 +188,11 @@ var
   x: ptruint;
 
   ehallocated: boolean;
-  allocs: TCEAllocArray;
-  exceptions: TCEExceptionListArray; //will hopefully be 0 long
+  disableinfo: tdisableinfo;
   i: integer;
 
 begin
+  {$ifdef windows}
   //check if CEAAExceptionHandler is already defined, and if not, define it here
 
   ehallocated:=false;
@@ -433,25 +442,35 @@ begin
     init.add('createthreadandwait(registereh)');
 
     //Clipboard.AsText:=init.text;
+    disableinfo:=TDisableInfo.create;
 
-    if autoassemble(init, false, true,false,false,allocs, exceptions)=false then
-      raise exception.create('Failure to assemble exception handler');
+    try
+      if autoassemble(init, false, true,false,false,disableinfo)=false then
+        raise exception.create('Failure to assemble exception handler');
 
-    for i:=0 to length(allocs)-1 do
-      if lowercase(allocs[i].varname)='signature' then
-        signatureaddress:=allocs[i].address
-      else
-      if lowercase(allocs[i].varname)='list' then
-        listaddress:=allocs[i].address
-      else
-      if lowercase(allocs[i].varname)='setlist' then
-        setlistaddress:=allocs[i].address;
+      for i:=0 to length(disableinfo.allocs)-1 do
+      begin
+        if lowercase(disableinfo.allocs[i].varname)='signature' then
+          signatureaddress:=disableinfo.allocs[i].address
+        else
+        if lowercase(disableinfo.allocs[i].varname)='list' then
+          listaddress:=disableinfo.allocs[i].address
+        else
+        if lowercase(disableinfo.allocs[i].varname)='setlist' then
+          setlistaddress:=disableinfo.allocs[i].address;
+      end;
 
 
-    init.free;
+    finally
+      init.free;
+      disableinfo.free;
+    end;
 
     pid:=processid;
   end;
+  {$else}
+  raise exception.create('{$try}/{$except} is not yet implemented for this system');
+  {$endif}
 end;
 
 end.

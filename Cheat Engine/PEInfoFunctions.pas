@@ -10,7 +10,11 @@ This unit will contain all functions used for PE-header inspection
 
 interface
 
-uses windows, LCLIntf,SysUtils,classes, CEFuncProc,NewKernelHandler,filemapping, commonTypeDefs;
+uses
+  {$ifdef windows}
+  windows,
+  {$endif}
+  LCLIntf,SysUtils,classes, CEFuncProc,NewKernelHandler,filemapping, commonTypeDefs;
 
 
 const
@@ -82,8 +86,16 @@ const
    IMAGE_SCN_MEM_READ                       = $40000000;  { Section is readable. }
    IMAGE_SCN_MEM_WRITE                      = DWORD($80000000);  { Section is writeable. }
 
+type
+  TSectionInfo=class
+    name: string;
+    virtualAddress: ptruint;
+    fileAddress: dword;
+    size: dword;
+  end;
 
 
+  {$ifdef windows}
 type
   _IMAGE_OPTIONAL_HEADER64 = packed record
     { Standard fields. }
@@ -123,7 +135,6 @@ type
   TImageOptionalHeader64 = _IMAGE_OPTIONAL_HEADER64;
   IMAGE_OPTIONAL_HEADER64 = _IMAGE_OPTIONAL_HEADER64;
   PImageOptionalHeader64 = ^TImageOptionalHeader64;
-
 
 
 type PUINT64=^UINT64;
@@ -167,7 +178,7 @@ PImageNtHeaders = ^TImageNtHeaders;
 _IMAGE_NT_HEADERS = packed record
   Signature: DWORD;
   FileHeader: TImageFileHeader;
-  OptionalHeader: TImageOptionalHeader;
+  OptionalHeader: TImageOptionalHeader32;
 end;
 TImageNtHeaders = _IMAGE_NT_HEADERS;
 IMAGE_NT_HEADERS = _IMAGE_NT_HEADERS;
@@ -229,6 +240,58 @@ TImageDosHeader = _IMAGE_DOS_HEADER;
 IMAGE_DOS_HEADER = _IMAGE_DOS_HEADER;
 
 
+(*
+typedef struct IMAGE_COR20_HEADER
+{
+    // Header versioning
+    DWORD                   cb;
+    WORD                    MajorRuntimeVersion;
+    WORD                    MinorRuntimeVersion;
+
+    // Symbol table and startup information
+    IMAGE_DATA_DIRECTORY    MetaData;
+    DWORD                   Flags;
+
+    // If COMIMAGE_FLAGS_NATIVE_ENTRYPOINT is not set, EntryPointToken represents a managed entrypoint.
+    // If COMIMAGE_FLAGS_NATIVE_ENTRYPOINT is set, EntryPointRVA represents an RVA to a native entrypoint.
+    union {
+        DWORD               EntryPointToken;
+        DWORD               EntryPointRVA;
+    } DUMMYUNIONNAME;
+
+    // Binding information
+    IMAGE_DATA_DIRECTORY    Resources;
+    IMAGE_DATA_DIRECTORY    StrongNameSignature;
+
+    // Regular fixup and binding information
+    IMAGE_DATA_DIRECTORY    CodeManagerTable;
+    IMAGE_DATA_DIRECTORY    VTableFixups;
+    IMAGE_DATA_DIRECTORY    ExportAddressTableJumps;
+
+    // Precompiled image info (internal use only - set to zero)
+    IMAGE_DATA_DIRECTORY    ManagedNativeHeader;
+
+} IMAGE_COR20_HEADER, *PIMAGE_COR20_HEADER;
+
+*)
+TImageCLRRuntimeDirectory=record
+  cb: DWORD;
+  MajorRuntimeVersion: WORD;
+  MinorRuntimeVersion: WORD;
+  MetaData: IMAGE_DATA_DIRECTORY;
+  Flags: DWORD;
+  EntryPointTokenOrRVA: DWORD;
+  Resources: IMAGE_DATA_DIRECTORY;
+  StrongNameSignature: IMAGE_DATA_DIRECTORY;
+  CodeManagerTable: IMAGE_DATA_DIRECTORY;
+  VTableFixups: IMAGE_DATA_DIRECTORY;
+  ExportAddressTableJumps: IMAGE_DATA_DIRECTORY;
+  ManagedNativeHeader: IMAGE_DATA_DIRECTORY;
+end;
+
+PImageCLRRuntimeDirectory=^TImageCLRRuntimeDirectory;
+
+
 type
   TRunTimeEntry=packed record
     start: dword;
@@ -248,27 +311,41 @@ type
 
 
     list: PRuntimeList;
+    function getEntry(index: integer): TRunTimeEntry;
+    function getCount: integer;
   public
     function getRunTimeEntry(address: ptruint): PRuntimeEntry;
     constructor create(modulebase: ptruint; ela: ptruint; els: integer);
     destructor destroy; override;
     property ModuleBase: ptruint read fModuleBase;
+    property Count: integer read getCount;
+    property Entry[index: integer]: TRunTimeEntry read getEntry; default;
+
+
   end;
 
 
 
+function peinfo_getSectionList(modulebase: ptruint; sectionList: Tstrings): boolean;
 function peinfo_getImageNtHeaders(headerbase: pointer; maxsize: dword):PImageNtHeaders;
 function peinfo_getExportList(filename: string; dllList: Tstrings): boolean; overload;
 function peinfo_getExportList(modulebase: ptruint; dllList: Tstrings): boolean; overload;
 function peinfo_is64bitfile(filename: string; var is64bit: boolean): boolean;
+function peinfo_isdotnetfile(filename: string; var isdotnet: boolean): boolean;
 function peinfo_getimagesizefromfile(filename: string; var size: dword): boolean;
 
 function peinfo_getExceptionList(modulebase: ptruint): TExceptionList;
 
+function peinfo_getImageSectionHeader(headerbase: pointer; maxsize: dword): PImageSectionHeader;
+
+     {$endif}
+
 
 implementation
 
-uses ProcessHandlerUnit;
+{$ifdef windows}
+uses ProcessHandlerUnit, PEInfounit;
+
 
 function peinfo_getImageDosHeader(headerbase: pointer):PImageDosHeader;
 {
@@ -380,6 +457,20 @@ begin
   end;
 end;
 
+
+function TExceptionList.getEntry(index: integer): TRunTimeEntry;
+begin
+  if index<count then
+    result:=list[index]
+  else
+    raise exception.create('Invalid index');
+end;
+
+function TExceptionList.getCount: integer;
+begin
+  result:=size div 12;
+end;
+
 constructor TExceptionList.create(modulebase: ptruint; ela: ptruint; els: integer);
 var br: ptruint;
 begin
@@ -431,22 +522,88 @@ begin
   end;
 end;
 
+
+
+function peinfo_getSectionList(modulebase: ptruint; sectionList: Tstrings): boolean;
+//WARNING: The caller has to free the sectionlist items after the call
+var
+  ar: ptruint;
+  header: pointer;
+  headersize: integer;
+  ImageNtHeader: PImageNtHeaders;
+  Sectionheader: PImageSectionHeader;
+  i: integer;
+
+  si: TSectionInfo;
+  s: string;
+begin
+  result:=false;
+  getmem(header, 8192);
+  try
+    if readProcessMemory(processhandle, pointer(modulebase),header, 8192, ar)=false then exit;
+    headersize:=peinfo_getheadersize(header);
+
+    if (headersize>0) and (headersize<512*1024) then
+    begin
+      freemem(header);
+      getmem(header,headersize);
+      ar:=0;
+      readProcessMemory(processhandle, pointer(modulebase),header, headersize, ar);
+      headersize:=ar;
+    end else exit(false);
+
+    ImageNtHeader:=peinfo_getImageNtHeaders(header,headersize);
+    if ImageNtHeader<>nil then
+    begin
+
+      Sectionheader:=peinfo_getImageSectionHeader(header, headersize);
+
+      if sectionheader<>nil then
+      begin
+        for i:=0 to ImageNtHeader.FileHeader.NumberOfSections-1 do
+        begin
+          if ptruint(sectionheader)>ptruint(header)+headersize then break;
+
+          s:=pchar(@sectionheader^.Name[0]);
+          if s<>'' then
+          begin
+            si:=TSectionInfo.Create;
+            si.name:=s;
+            si.virtualAddress:=modulebase+sectionheader^.VirtualAddress;
+            si.fileAddress:=sectionheader^.PointerToRawData;
+            si.size:=sectionheader^.SizeOfRawData;
+
+            sectionlist.AddObject(si.name, si);
+            sectionheader:=PImageSectionHeader(ptruint(sectionheader)+sizeof(TImageSectionHeader));
+          end;
+        end;
+        result:=true;
+      end;
+
+    end;
+
+
+  finally
+    freemem(header);
+  end;
+end;
+
 function peinfo_getExportList(modulebase: ptruint; dllList: Tstrings): boolean;
 var
-    header: pointer;
-    ImageNtHeader: PImageNtHeaders;
-    OptionalHeader: PImageOptionalHeader;
-    OptionalHeader64: PImageOptionalHeader64 absolute OptionalHeader;
-    ImageExportDirectory: PImageExportDirectory;
-    is64bit: boolean;
+  header: pointer;
+  ImageNtHeader: PImageNtHeaders;
+  OptionalHeader: PImageOptionalHeader;
+  OptionalHeader64: PImageOptionalHeader64 absolute OptionalHeader;
+  ImageExportDirectory: PImageExportDirectory;
+  is64bit: boolean;
 
-    addresslist: PDwordArray;
-    exportlist: PDwordArray;
-    functionname: pchar;
-    i: integer;
-    ar:ptruint;
+  addresslist: PDwordArray;
+  exportlist: PDwordArray;
+  functionname: pchar;
+  i: integer;
+  ar:ptruint;
 
-    imagesize: dword;
+  imagesize: dword;
 begin
   result:=false;
 
@@ -627,14 +784,55 @@ begin
   end;
 end;
 
+function peinfo_isdotnetfile(filename: string; var isdotnet: boolean): boolean;
+var fmap: TFileMapping;
+    header: pointer;
+    OptionalHeader: PImageOptionalHeader;
+    OptionalHeader64: PImageOptionalHeader64 absolute OptionalHeader;
+    is64bit: boolean;
+    ImageNtHeader: PImageNtHeaders;
+    netdata: dword;
+begin
+  result:=false;
+
+  try
+    fmap:=TFileMapping.create(filename);
+    if fmap<>nil then
+    begin
+      try
+        header:=fmap.fileContent;
+        ImageNtHeader:=peinfo_getImageNtHeaders(header,fmap.filesize);
+        if ImageNTHeader=nil then raise exception.Create(strInvalidFile);
+        if ImageNTHeader^.FileHeader.Machine=$8664 then
+          is64bit:=true
+        else
+          is64bit:=false;
+
+        OptionalHeader:=peinfo_getOptionalHeaders(header,fmap.filesize);
+        if OptionalHeader<>nil then
+        begin
+          if is64bit then
+            netdata:=OptionalHeader64.DataDirectory[14].Size
+          else
+            netdata:=OptionalHeader.DataDirectory[14].Size;
+
+          isdotnet:=netdata<>0;
+          result:=true;
+        end;
+      finally
+        fmap.free;
+      end;
+
+    end;
+  except
+
+  end;
+end;
+
 function peinfo_is64bitfile(filename: string; var is64bit: boolean): boolean;
 var fmap: TFileMapping;
     header: pointer;
     ImageNtHeader: PImageNtHeaders;
-    OptionalHeader: PImageOptionalHeader;
-    OptionalHeader64: PImageOptionalHeader64 absolute OptionalHeader;
-
-   // a: dword;
 begin
   //open the file
   //parse the header
@@ -668,6 +866,8 @@ begin
 
   end;
 end;
+
+{$endif}
 
 
 end.

@@ -8,6 +8,7 @@ uses
   {$ENDIF}{$ENDIF}
   Classes,
   windows,
+  LazUTF8,
   sysutils,
 
   ShellApi
@@ -28,11 +29,16 @@ var IsWow64Process        :TIsWow64Process;
     isWow: BOOL;
 
     self: thandle;
-    selfname: pchar;
-    selfpath: string;
+    selfname: pwidechar;
+    selfpath: widestring;
 
     param: string;
     i: integer;
+
+    cpuid7ebx: dword;
+    exename: widestring;
+
+    s: string;
 begin
   {$ifdef cpu64}
   MessageBox(0,'A fucking retard thought that removing an earlier $ERROR line would be enough to run this','',0);
@@ -51,34 +57,48 @@ begin
       launch32bit:=not isWow;
   end;
 
-  self:=GetModuleHandle(0);
+  self:=GetModuleHandle(nil);
 
   getmem(selfname,512);
-  if GetModuleFileName(self, selfname, 512)>0 then
+  if GetModuleFileNameW(self, selfname, 512)>0 then
     selfpath:=ExtractFilePath(selfname)
   else
     selfpath:=''; //fuck it if it fails
 
   param:='';
   for i:=1 to paramcount do
-   param:=param+'"'+paramstr(i)+'" ';
+   param:=param+'"'+ParamStrUTF8(i)+'" ';
 
   //MessageBox(0, pchar(param),'bla',0);
 
   if launch32bit then
-  begin
-    if fileexists(selfpath+'cheatengine-i386.exe') then
-      ShellExecute(0, 'open', pchar(selfpath+'cheatengine-i386.exe'), pchar(param), pchar(selfpath), sw_show)
-    else
-      MessageBox(0, 'cheatengine-i386.exe could not be found. Please disable/uninstall your anti virus and reinstall Cheat Engine to fix this','Cheat Engine launch error',MB_OK or MB_ICONERROR);
-  end
+    exename:='cheatengine-i386.exe'
   else
   begin
-    if FileExists(selfpath+'cheatengine-x86_64.exe') then
-      ShellExecute(0, 'open', pchar(selfpath+'cheatengine-x86_64.exe'), pchar(param), pchar(selfpath), sw_show)
+    asm
+      push ecx
+      mov ecx,0
+      mov eax,7
+      cpuid
+      mov cpuid7ebx,ebx
+      pop ecx
+    end;
+
+    if (cpuid7ebx and (1 shl 5))>0 then
+      exename:='cheatengine-x86_64-SSE4-AVX2.exe'
     else
-      MessageBox(0, 'cheatengine-x86_64.exe could not be found. Please disable/uninstall your anti virus and reinstall Cheat Engine to fix this','Cheat Engine launch error',MB_OK or MB_ICONERROR);
+      exename:='cheatengine-x86_64.exe';
   end;
+
+  
+  if FileExists(selfpath+exename) then
+    ShellExecuteW(0, 'open', pwidechar(selfpath+exename), pwidechar(widestring(param)), pwidechar(selfpath), sw_show)
+  else
+  begin
+    s:=exename;
+    MessageBoxW(0, pwidechar(exename+' could not be found. Please disable/uninstall your anti virus and reinstall Cheat Engine to fix this'),'Cheat Engine launch error',MB_OK or MB_ICONERROR);
+  end;
+
 
 end.
 

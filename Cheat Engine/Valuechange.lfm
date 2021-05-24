@@ -13,7 +13,7 @@ object ValueChangeForm: TValueChangeForm
   OnCreate = FormCreate
   OnShow = FormShow
   Position = poScreenCenter
-  LCLVersion = '2.0.0.4'
+  LCLVersion = '2.0.6.0'
   object cbVarType: TComboBox
     AnchorSideLeft.Control = Owner
     AnchorSideTop.Control = ValueText
@@ -68,6 +68,7 @@ object ValueChangeForm: TValueChangeForm
     Width = 64
     BorderSpacing.Left = 4
     Caption = 'Unicode'
+    OnChange = cbunicodeChange
     TabOrder = 2
     Visible = False
   end

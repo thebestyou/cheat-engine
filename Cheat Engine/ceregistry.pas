@@ -9,6 +9,9 @@ Wrapper to replace the creating and destroying of default level registry objects
 interface
 
 uses
+  {$ifdef darwin}
+  macPort,
+  {$endif}
   Classes, SysUtils, registry;
 
 type
@@ -27,6 +30,9 @@ type
     function readInteger(registryValueName:string; def: integer=0): integer;
     procedure writeString(registryValueName: string; value: string);
     function readString(registryValueName:string; def: string=''): string;
+    procedure writeStrings(registryValueName: string; sl: TStrings);
+    procedure readStrings(registryValueName: string; sl: TStrings);
+
   end;
 
 var cereg: TCEReg;
@@ -35,6 +41,14 @@ implementation
 
 function TCEReg.getRegistry(force: boolean):boolean;
 begin
+  {$ifdef darwin}
+  //all registry objects access the same object. and that object has the current key set...
+  if reg<>nil then
+    reg.OpenKey('\Software\Cheat Engine\', false);
+
+
+  {$endif}
+
   if not openedregistry then
   begin
     if triedforce and (gettickcount64<lastforce+2000) then exit(false);
@@ -55,22 +69,61 @@ begin
       else
         needsforce:=true;
     end;
+
+    {$ifdef darwin}
+    macPortFixRegPath;
+    {$endif}
   end;
 
+
   result:=openedregistry;
+end;
+
+procedure TCEReg.writeStrings(registryValueName: string; sl: TStrings);
+begin
+  if getregistry(true) then
+  begin
+    try
+      reg.WriteStringList(registryValueName, sl);
+    except
+    end;
+  end;
+end;
+
+procedure TCEReg.readStrings(registryValueName: string; sl: TStrings);
+begin
+  sl.Clear;
+
+  if getregistry(false) and (reg.ValueExists(registryValueName)) then
+  begin
+    try
+      reg.ReadStringList(registryValueName, sl);
+    except
+    end;
+  end;
 end;
 
 function TCEReg.readBool(registryValueName: string; def: boolean=false): boolean;
 begin
   result:=def;
   if getregistry(false) and (reg.ValueExists(registryValueName)) then
-    result:=reg.ReadBool(registryValueName);
+  begin
+    try
+      result:=reg.ReadBool(registryValueName);
+    except
+    end;
+  end;
 end;
 
 procedure TCEReg.writeBool(registryValueName: string; value: boolean);
 begin
   if getregistry(true) then
-    reg.WriteBool(registryValueName, value);
+  begin
+    try
+      reg.WriteBool(registryValueName, value);
+    except
+    end;
+  end;
 end;
 
 function TCEReg.readInteger(registryValueName: string; def: integer=0): integer;

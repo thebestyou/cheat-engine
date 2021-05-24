@@ -6,7 +6,7 @@ interface
 
 uses
   LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
-  Dialogs, ComCtrls,CEFuncProc,NewKernelHandler, StdCtrls, LResources, commonTypeDefs;
+  Dialogs, ComCtrls,CEFuncProc,NewKernelHandler, StdCtrls, LResources, commonTypeDefs, betterControls;
 
 type
   TfrmIDT = class(TForm)
@@ -66,6 +66,7 @@ var limit: word;
 
     title: string;
 begin
+  {$ifdef windows}
   getidts(@address,1);
   limit:=256;
 
@@ -108,6 +109,7 @@ begin
   finally
     freememandnil(x);
   end;
+  {$endif}
 end;
 
 initialization

@@ -3,39 +3,48 @@ program cheatengine;
 {$mode objfpc}{$H+}
 
 uses
+  {$ifdef darwin}
+  cthreads,
+  {$endif}
   first,
   {$IFDEF UNIX}{$IFDEF UseCThreads}
   cthreads,
   {$ENDIF}{$ENDIF}
   Interfaces, {CEInterfaces,} // this includes the LCL widgetset
-  controls, sysutils, Forms, LazUTF8, dialogs, SynCompletion, MainUnit,
-  CEDebugger, NewKernelHandler, CEFuncProc, ProcessHandlerUnit, symbolhandler,
-  Assemblerunit, hypermode, byteinterpreter, addressparser, autoassembler,
-  ProcessWindowUnit, MainUnit2, Filehandler, dbvmPhysicalMemoryHandler,
-  frameHotkeyConfigUnit, formsettingsunit, HotkeyHandler, formhotkeyunit,
-  AdvancedOptionsUnit, inputboxtopunit, plugin, pluginexports, tlgUnit,
-  aboutunit, frmProcesswatcherExtraUnit, frmProcessWatcherUnit,
-  ModuleSafetyUnit, frmExcludeHideUnit, HotKeys, TypePopup, CommentsUnit,
-  FoundCodeUnit, foundlisthelper, unrandomizer, SaveFirstScan, savedscanhandler,
-  memscan, KernelDebugger, formDifferentBitSizeUnit, formAddressChangeUnit,
-  Changeoffsetunit, speedhack2, formPointerOrPointeeUnit, AccessCheck,
-  formmemoryregionsunit, OpenSave, formProcessInfo, frmautoinjectunit,
-  MenuItemExtra, MemoryBrowserFormUnit, disassemblerviewlinesunit,
-  disassemblerviewunit, PasteTableentryFRM, frmBreakpointlistunit,
-  DissectCodeThread, DissectCodeunit, Valuechange, FindWindowUnit, stacktrace2,
-  frmstacktraceunit, frmBreakThreadUnit, FormDebugStringsUnit,
-  frmDissectwindowUnit, frmCapturedTimersUnit, frmEnumerateDLLsUnit,
-  frmThreadlistunit, frmMemoryAllocHandlerUnit, circularBuffer, PEInfoFunctions,
-  PEInfounit, FileMapping, frmFindstaticsUnit, frmModifyRegistersUnit,
-  frmHeapsUnit, savedisassemblyfrm, frmSaveMemoryRegionUnit, frmLoadMemoryunit,
-  formAddToCodeList, frmFillMemoryUnit, frmCodecaveScannerUnit,
-  frmSelectionlistunit, symbolconfigunit, frmFloatingPointPanelUnit,
-  frmTracerUnit, DriverList, frmRegistersunit, formChangedAddresses, frmGDTunit,
-  frmIDTunit, frmDisassemblyscanunit, frmReferencedStringsUnit,
-  StructuresAddElementfrm, Structuresfrm, PointerscannerSettingsFrm,
-  simpleaobscanner, PointerscanresultReader, pointervaluelist, rescanhelper,
-  pointerscannerfrm, VirtualMemory, ValueFinder, frmRescanPointerUnit,
-  SyncObjs2, ManualModuleLoader, SynHighlighterAA, APIhooktemplatesettingsfrm,
+  {$ifdef darwin}
+  //
+  macport, macportdefines,coresymbolication, macexceptiondebuggerinterface,
+  macCreateRemoteThread, macumm, machotkeys, macPipe,
+  {$endif}
+  betterControls, controls, sysutils, Forms, LazUTF8, dialogs, SynCompletion,
+  MainUnit, CEDebugger, NewKernelHandler, CEFuncProc, ProcessHandlerUnit,
+  symbolhandler, Assemblerunit, hypermode, byteinterpreter, addressparser,
+  autoassembler, ProcessWindowUnit, MainUnit2, Filehandler,
+  dbvmPhysicalMemoryHandler, frameHotkeyConfigUnit, formsettingsunit,
+  HotkeyHandler, formhotkeyunit, AdvancedOptionsUnit, inputboxtopunit, plugin,
+  pluginexports, tlgUnit, aboutunit, frmProcesswatcherExtraUnit,
+  frmProcessWatcherUnit, ModuleSafetyUnit, frmExcludeHideUnit, HotKeys,
+  TypePopup, CommentsUnit, FoundCodeUnit, foundlisthelper, unrandomizer,
+  SaveFirstScan, savedscanhandler, memscan, KernelDebugger,
+  formDifferentBitSizeUnit, formAddressChangeUnit, Changeoffsetunit, speedhack2,
+  formPointerOrPointeeUnit, AccessCheck, formmemoryregionsunit, OpenSave,
+  formProcessInfo, frmautoinjectunit, MenuItemExtra, MemoryBrowserFormUnit,
+  disassemblerviewlinesunit, disassemblerviewunit, PasteTableentryFRM,
+  frmBreakpointlistunit, DissectCodeThread, DissectCodeunit, Valuechange,
+  FindWindowUnit, stacktrace2, frmstacktraceunit, frmBreakThreadUnit,
+  FormDebugStringsUnit, frmDissectwindowUnit, frmCapturedTimersUnit,
+  frmEnumerateDLLsUnit, frmThreadlistunit, frmMemoryAllocHandlerUnit,
+  circularBuffer, PEInfoFunctions, PEInfounit, FileMapping, frmFindstaticsUnit,
+  frmModifyRegistersUnit, frmHeapsUnit, savedisassemblyfrm,
+  frmSaveMemoryRegionUnit, frmLoadMemoryunit, formAddToCodeList,
+  frmFillMemoryUnit, frmCodecaveScannerUnit, frmSelectionlistunit,
+  symbolconfigunit, frmFloatingPointPanelUnit, frmTracerUnit, DriverList,
+  frmRegistersunit, formChangedAddresses, frmGDTunit, frmIDTunit,
+  frmDisassemblyscanunit, frmReferencedStringsUnit, StructuresAddElementfrm,
+  Structuresfrm, PointerscannerSettingsFrm, simpleaobscanner,
+  PointerscanresultReader, pointervaluelist, rescanhelper, pointerscannerfrm,
+  VirtualMemory, ValueFinder, frmRescanPointerUnit, SyncObjs2,
+  ManualModuleLoader, SynHighlighterAA, APIhooktemplatesettingsfrm,
   frmAAEditPrefsUnit, disassembler, hexviewunit, guisafecriticalsection,
   debugeventhandler, formFoundcodeListExtraUnit, debuggertypedefinitions,
   addresslist, MemoryRecordUnit, ThreadlistExFRM, windows7taskbar, tablist,
@@ -86,7 +95,7 @@ uses
   PointerscanWorker, PointerscanStructures, PointerscanController, zstreamext,
   PointerscanConnector, PointerscanNetworkStructures, AsyncTimer,
   PointerscanSettingsIPConnectionList, MemoryStreamReader, commonTypeDefs,
-  Parsers, Globals, NullStream, RipRelativeScanner, LuaRipRelativeScanner,
+  Parsers, Globals, NullStream, RipRelativeScanner, LuaRIPRelativeScanner,
   VirtualQueryExCache, disassemblerthumb, AccessedMemory, LuaStructureFrm,
   MemoryQuery, pointerparser, GnuAssembler, binutils, dbvmLoadManual, mikmod,
   frmEditHistoryUnit, LuaInternet, xinput, frmUltimap2Unit, cpuidunit, libipt,
@@ -104,18 +113,28 @@ uses
   textrender, diagramtypes, diagramblock, diagram, LuaDiagram, LuaDiagramBlock,
   LuaDiagramLink, diagramlink, BreakpointTypeDef, frmFoundlistPreferencesUnit,
   LuaHeaderSections, frmDebuggerAttachTimeoutUnit, cheatecoins,
-  frmMicrotransactionsUnit, frmSyntaxHighlighterEditor, LuaCustomImageList;
+  frmMicrotransactionsUnit, frmSyntaxHighlighterEditor, LuaCustomImageList,
+  dotnethost, rttihelper, cefreetype, LuaDotNetPipe, LuaRemoteExecutor,
+  autoassemblercode, CSharpCompiler, newhintwindow, memrecDataStructures,
+  LuaCECustomButton, DBVMDebuggerInterface, frmCR3SwitcherUnit, tcclib,
+  sourcecodehandler, frmSourceDisplayUnit;
 
 {$R cheatengine.res}
-{$R manifest.res}  //lazarus now has this build in (but sucks as it explicitly turns of dpi aware)
+{$IFDEF windows}
+//{$R manifest.res}  //lazarus now has this build in (but sucks as it explicitly turns of dpi aware)
 //{$R Sounds.rc}
 //{$R images.rc}
-{$R images.res}
-{$R Sounds.res}
-
 {$ifdef cpu32}
 {$SetPEFlags $20}
 {$endif}
+
+{$ENDIF}
+
+{$R sounds.res}
+{$R Images.res}
+
+
+
 
 procedure HandleParameters;
 {Keep in mind: Responsible for not making the mainform visible}
@@ -139,6 +158,10 @@ begin
 
       if p<>'' then
       begin
+        {$ifdef darwin}
+        if p='hasrights' then continue;
+        {$endif}
+
         if p[1]='-' then
         begin
           //could be -ORIGIN
@@ -219,7 +242,11 @@ begin
       break;
     end;
 
+{$ifdef darwin}
+  frmmacumm.visible:=true;
+{$else}
   mainform.visible:=mainformvisible;
+{$endif}
 end;
 
 type TFormFucker=class
@@ -248,8 +275,18 @@ var
   path: string;
   noautorun: boolean;
 begin
-  Application.Title:='Cheat Engine 7.0';
+  Application.Title:='Cheat Engine 7.3';
+  {$ifdef darwin}
+  macPortFixRegPath;
+  {$endif}
+  outputdebugstring('start');
+
   Application.Initialize;
+
+  {$ifdef windows}
+  registerDarkModeHintHandler;
+  {$endif}
+
 
   overridefont:=nil;
   noautorun:=false;
@@ -276,7 +313,12 @@ begin
   if not istrainer then
   begin
     //check the user preferences
+    {$ifdef darwin}
+    macPortFixRegPath;
+    {$endif}
+
     r := TRegistry.Create;
+
     r.RootKey := HKEY_CURRENT_USER;
     if r.OpenKey('\Software\Cheat Engine',false) then
     begin
@@ -329,11 +371,22 @@ begin
   Application.CreateForm(TAdvancedOptions, AdvancedOptions);
   Application.CreateForm(TComments, Comments);
   Application.CreateForm(TTypeForm, TypeForm);
+  {$ifdef darwin}
+  Application.CreateForm(TfrmMacUmm, frmMacUmm);
+  {$endif}
 
   initcetitle;
+  {$ifdef darwin}
+  macPortFixRegPath;
+  {$endif}
+
   InitializeLuaScripts(noautorun);
 
   handleparameters;
+
+  OutputDebugString('Starting CE');
+
+
 
   Application.Run;
 end.

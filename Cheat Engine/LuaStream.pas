@@ -11,7 +11,7 @@ procedure stream_addMetaData(L: PLua_state; metatable: integer; userdata: intege
 
 implementation
 
-uses LuaClass, LuaHandler, LuaObject;
+uses LuaClass, LuaHandler, LuaObject{$ifdef darwin},mactypes{$endif};
 
 function stream_getSize(L: PLua_State): integer; cdecl;
 var
@@ -26,11 +26,26 @@ end;
 function stream_setSize(L: PLua_State): integer; cdecl;
 var
   stream: Tstream;
+  oldsize: integer;
+  newsize: integer;
+  diff: integer;
 begin
   result:=0;
   stream:=luaclass_getClassObject(L);
-  if lua_gettop(L)=1 then
-    stream.Size:=lua_tointeger(L,-1);
+  if lua_gettop(L)>=1 then
+  begin
+    newsize:=lua_tointeger(L,1);
+    if stream is TMemoryStream then
+    begin
+      oldsize:=stream.size;
+      stream.size:=newsize;
+
+      //zero the new bytes
+      FillByte(pointer(ptruint(tmemorystream(stream).Memory)+oldsize)^, newsize-oldsize,0);
+    end
+    else
+      stream.Size:=newsize;
+  end;
 end;
 
 function stream_getPosition(L: PLua_State): integer; cdecl;
@@ -216,7 +231,11 @@ begin
     if lua_istable(L, 1) then
     begin
       if lua_gettop(L)>=2 then
+      {$if FPC_FULLVERSION < 030200}
+        count:=min(int64(lua_objlen(L, 1)), int64(lua_tointeger(L, 2)))
+      {$else}
         count:=min(lua_objlen(L, 1), lua_tointeger(L, 2)) //prevent the length from exeeding the table
+      {$endif}
       else
         count:=lua_objlen(L, 1);
 
@@ -288,11 +307,57 @@ begin
   result:=0;
 end;
 
+function memorystream_loadFromFileNoError(L: PLua_State): integer; cdecl;
+var
+  ms: Tmemorystream;
+  r: boolean=false;
+begin
+  result:=0;
+  ms:=luaclass_getClassObject(L);
+  if lua_gettop(L)>=1 then
+  try
+    ms.LoadFromFile(Lua_ToString(L,1));
+    lua_pushboolean(L,true);
+    result:=1;
+  except
+    on e:exception do
+    begin
+      lua_pushboolean(L,false);
+      lua_pushstring(L,e.message);
+      result:=2;
+    end;
+  end;
+end;
+
+function memorystream_saveToFileNoError(L: PLua_State): integer; cdecl;
+var ms: Tmemorystream;
+begin
+  result:=0;
+
+  ms:=luaclass_getClassObject(L);
+  if lua_gettop(L)>=1 then
+  try
+    ms.SaveToFile(Lua_ToString(L,1));
+    lua_pushboolean(L,true);
+    result:=1;
+  except
+    on e:exception do
+    begin
+      lua_pushboolean(L,false);
+      lua_pushstring(L,e.message);
+      result:=2;
+    end;
+  end;
+
+end;
+
 procedure memorystream_addMetaData(L: PLua_state; metatable: integer; userdata: integer );
 begin
   stream_addMetaData(L, metatable, userdata);
   luaclass_addClassFunctionToTable(L, metatable, userdata, 'loadFromFile', memorystream_loadFromFile);
   luaclass_addClassFunctionToTable(L, metatable, userdata, 'saveToFile', memorystream_saveToFile);
+  luaclass_addClassFunctionToTable(L, metatable, userdata, 'loadFromFileNoError', memorystream_loadFromFileNoError);
+  luaclass_addClassFunctionToTable(L, metatable, userdata, 'saveToFileNoError', memorystream_saveToFileNoError);
   luaclass_addPropertyToTable(L, metatable, userdata, 'Memory', memorystream_getMemory, nil);
 end;
 

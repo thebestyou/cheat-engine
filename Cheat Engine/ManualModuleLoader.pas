@@ -8,6 +8,8 @@ This routine will examine a module and then load it into memory, taking care of 
 
 interface
 
+{$ifdef windows}
+
 uses windows, LCLIntf, classes, sysutils, imagehlp, dialogs, PEInfoFunctions,CEFuncProc,
      NewKernelHandler, symbolhandler, dbk32functions, vmxfunctions, commonTypeDefs,
      SymbolListHandler, symbolhandlerstructs, StringHashList;
@@ -47,8 +49,12 @@ type TModuleLoader=class
     property SymbolList: TSymbollistHandler read fSymbolList;
 end;
 
+{$endif}
+
 implementation
 
+
+{$ifdef windows}
 uses ProcessHandlerUnit;
 
 procedure TModuleLoader.createSymbolListHandler;
@@ -140,7 +146,7 @@ begin
   if pid=0 then
     pid:=GetCurrentProcessId;
     
-  processhandle:=dbk32functions.OP(PROCESS_ALL_ACCESS, true, pid);
+  processhandle:=dbk32functions.OP(ifthen<dword>(GetSystemType<=6,$1f0fff, process_all_access), true, pid);
 
   filemap:=tmemorystream.Create;
   try
@@ -313,7 +319,12 @@ begin
                     begin
                       funcaddress:=symhandler.getAddressFromName(importmodulename+'!'+importfunctionname, true, haserror);
                       if haserror then
-                        raise exception.create(rsMMLFailedFindingAddressOf+importmodulename+'!'+importfunctionname);
+                      begin
+                        //try without module (in case it's one of those downlevel dlls that just don't work well)
+                        funcaddress:=symhandler.getAddressFromName(importfunctionname, true, haserror);
+                        if haserror then
+                          raise exception.create(rsMMLFailedFindingAddressOf+importmodulename+'!'+importfunctionname);
+                      end;
                     end;
 
                     PQWORD(importaddress)^:=funcaddress;
@@ -412,5 +423,7 @@ begin
     cleanupExportList;
   end;
 end;
+
+{$endif}
 
 end.

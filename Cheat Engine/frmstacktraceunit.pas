@@ -5,9 +5,15 @@ unit frmstacktraceunit;
 interface
 
 uses
-  windows, LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
-  Dialogs,NewKernelHandler, CEFuncProc, ComCtrls,imagehlp,CEDebugger, KernelDebugger,
-  Menus, LResources, debughelper, symbolhandler;
+  {$ifdef darwin}
+  macport, macportdefines,
+  {$endif}
+  {$ifdef windows}
+  windows, imagehlp,
+  {$endif}
+  LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
+  Dialogs,NewKernelHandler, CEFuncProc, ComCtrls,CEDebugger, KernelDebugger,
+  Menus, LResources, debughelper, symbolhandler, betterControls;
 
 type
 
@@ -47,12 +53,13 @@ var
   shadowNew: ptruint;
   shadowSize: integer;
 
-
+  {$ifdef windows}
 
 function rpm64(hProcess:THANDLE; qwBaseAddress:dword64; lpBuffer:pointer; nSize:dword; lpNumberOfBytesRead:lpdword):bool;stdcall; //should be lpptruint but the header file isn't correct
 var
     br: ptruint;
 begin
+
   result:=false;
   {$ifndef cpu64}
   if qwBaseAddress>$FFFFFFFF then exit;
@@ -135,8 +142,10 @@ begin
   end;
 end;
 
+{$endif}
 
 procedure TfrmStacktrace.stacktrace(threadhandle:thandle;context:_context);
+{$ifdef windows}
 var
     cxt:_context;
     stackframe: TSTACKFRAME_EX;
@@ -150,8 +159,11 @@ var
 
     found: boolean;
     i: integer;
-begin
 
+    li: TListitem;
+    {$endif}
+begin
+{$ifdef windows}
   if (exceptionlistPID<>processid) and (length(exceptionlists)>0) then
     cleanupExceptionList;
 
@@ -204,11 +216,12 @@ begin
     while stackwalk64(machinetype,processhandle,threadhandle,@stackframe,cp, rpm64 ,function_table_access_routine64, get_module_base_routine64,nil) do
     begin
 
-
-      listview1.Items.Add.Caption:=symhandler.getNameFromAddress(stackframe.AddrPC.Offset, true, true);
-      listview1.items[listview1.Items.Count-1].SubItems.add(inttohex(stackframe.AddrStack.Offset,8));
-      listview1.items[listview1.Items.Count-1].SubItems.add(inttohex(stackframe.AddrFrame.Offset,8));
-      listview1.items[listview1.Items.Count-1].SubItems.add(symhandler.getNameFromAddress(stackframe.AddrReturn.Offset,true,true));
+      li:=listview1.Items.Add;
+      li.data:=pointer(stackframe.AddrReturn.Offset);
+      li.caption:=symhandler.getNameFromAddress(stackframe.AddrPC.Offset, true, true, false);
+      li.SubItems.add(inttohex(stackframe.AddrStack.Offset,8));
+      li.SubItems.add(inttohex(stackframe.AddrFrame.Offset,8));
+      li.SubItems.add(symhandler.getNameFromAddress(stackframe.AddrReturn.Offset,true,true, false));
 
       a:=stackframe.Params[0];
       b:=stackframe.Params[1];
@@ -225,6 +238,7 @@ begin
   finally
     freememandnil(cp);
   end;
+  {$endif}
 end;
 
 procedure TfrmstackTrace.refreshtrace;
@@ -256,16 +270,24 @@ end;
 procedure TfrmStacktrace.ListView1DblClick(Sender: TObject);
 begin
   if listview1.Selected<>nil then
+  begin
     memorybrowser.disassemblerview.TopAddress:=symhandler.getAddressFromName(listview1.Selected.Caption);
+    if memorybrowser.visible=false then
+      memorybrowser.show();
+  end;
 end;
 
 procedure TfrmStacktrace.shadowstacktrace(context: _context; stackcopy: pointer; stackcopysize: integer);
 begin
+  {$ifdef windows}
   useshadow:=true;
   shadowOrig:=context.{$ifdef cpu64}rsp{$else}esp{$endif};
   shadowNew:=ptruint(stackcopy);
   shadowSize:=stackcopysize;
+
+
   stacktrace(GetCurrentThread, context);
+  {$endif}
 end;
 
 
@@ -273,6 +295,7 @@ procedure TfrmStacktrace.miManualStackwalkClick(Sender: TObject);
 var c: _CONTEXT;
     frmManualStacktraceConfig: TfrmManualStacktraceConfig;
 begin
+  {$ifdef windows}
   zeromemory(@c, sizeof(_CONTEXT));
 
   frmManualStacktraceConfig:=tfrmManualStacktraceConfig.create(self);
@@ -295,7 +318,7 @@ begin
   end;
   frmManualStacktraceConfig.free;
 
-
+  {$endif}
 end;
 
 procedure TfrmStacktrace.Refresh1Click(Sender: TObject);
@@ -309,7 +332,9 @@ initialization
 
 
 finalization
+  {$ifdef windows}
   cleanupExceptionList;
+  {$endif}
 
 
 end.

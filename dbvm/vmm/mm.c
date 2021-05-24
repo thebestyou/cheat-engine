@@ -10,6 +10,7 @@ Just used for basic initialization allocation, frees shouldn't happen too often
 #include "multicore.h"
 #include "common.h"
 #include "vmmhelper.h"
+#include "displaydebug.h"
 
 //#define sendstringf(s,x...)
 //#define sendstring(s)
@@ -29,8 +30,8 @@ Just used for basic initialization allocation, frees shouldn't happen too often
 #define GLOBALMAPPEDMEMORY 0x07000000000ULL
 
 //for virtual memory allocs
-criticalSection AllocCS;
-criticalSection GlobalMapCS;
+criticalSection AllocCS={.name="cinthandlerMenuCS", .debuglevel=2};
+criticalSection GlobalMapCS={.name="GlobalMapCS", .debuglevel=2};
 
 
 PageAllocationInfo *AllocationInfoList=(PageAllocationInfo *)BASE_VIRTUAL_ADDRESS;
@@ -52,11 +53,13 @@ PPDPTE_PAE pagedirptrtables=(PPDPTE_PAE)0xffffffffffe00000ULL;
 PPDE_PAE      pagedirtables=  (PPDE_PAE)0xffffffffc0000000ULL;
 PPTE_PAE         pagetables=  (PPTE_PAE)0xffffff8000000000ULL;
 
+
+
 QWORD FirstFreeAddress;
 
 unsigned char MAXPHYADDR=0; //number of bits a physical address can be made up of
 QWORD MAXPHYADDRMASK=  0x0000000fffffffffULL; //mask to AND with a physical address to strip invalid bits
-QWORD MAXPHYADDRMASKPB=0x0000000ffffff000ULL; //same as MAXPHYADDRMASK but also aligns it to a page boundary
+QWORD MAXPHYADDRMASKPB=0x0000000ffffff000ULL; //same as MAXPHYADDRMASK but also aligns it to a page boundary1F4E20
 
 
 //alloc(not 2) keeps a list of allocs and their sizes.  This linked list (allocated using alloc2) is used to keep track of those allocs. Sorted by base
@@ -78,7 +81,50 @@ int AllocListPos=0;
 
 UINT64 TotalAvailable;
 
+
+void* contiguousMemory; //alloc once memory. Doesn't allow free yet
+int contiguousMemoryPagesFree;
+
+
 void free2(void *address, unsigned int size);
+
+
+void* allocateContiguousMemory(int pagecount)
+{
+  void *result=NULL;
+  csEnter(&AllocCS);
+
+  sendstringf("allocateContiguousMemory(%d)\n", pagecount);
+  sendstringf("contiguousMemoryPagesFree=%d\n", contiguousMemoryPagesFree);
+  sendstringf("contiguousMemory=%p\n", contiguousMemory);
+
+
+  if (contiguousMemoryPagesFree>=pagecount)
+  {
+    result=contiguousMemory;
+
+    (*(QWORD*)&contiguousMemory)+=4096*pagecount;
+    contiguousMemoryPagesFree-=pagecount;
+  }
+  else
+  {
+    nosendchar[getAPICID()]=0;
+    sendstringf("contiguousMemoryPagesFree<pagecount");
+    while (1)
+    {
+      sendstringf("contiguousMemoryPagesFree<pagecount");
+
+      outportb(0x80,0x01);
+      outportb(0x80,0x10);
+    }
+  }
+
+
+
+  csLeave(&AllocCS);
+
+  return result;
+}
 
 /*
  * There was a time where the memory manager would free blocks it shouldn't. this is a test for that scenario)
@@ -172,7 +218,7 @@ void unmapAddressAtPML4(PPTE_PAE base)
 
 PPTE_PAE mapAddressAtPML4(QWORD address)
 {
-  static criticalSection CS;
+  static criticalSection CS={.name="static mapAddressAtPML4 CS", .debuglevel=2};
   int index;
 
   csEnter(&CS);
@@ -359,7 +405,7 @@ int mmFindMapPositionForSize(pcpuinfo cpuinfo, int size)
         j++;
 
         if (j>=1024)
-          break; //not enough space left
+          return -1;
       }
 
       if (needed==0)
@@ -485,8 +531,12 @@ void* mapPhysicalMemoryAddresses(QWORD *addresses, int count)
   int pos=mmFindMapPositionForSize(c, count*4096);
   if (pos==-1)
   {
+    nosendchar[getAPICID()]=0;
     sendstring("mapPhysicalMemoryAddresses: Out of virtual memory to map region.  Check the size and make sure you unmap as well\n");
-    while (FreezeOnMapAllocFail);
+    while (FreezeOnMapAllocFail)
+    {
+      outportb(0x80,2);
+    }
     return NULL;
   }
 
@@ -524,8 +574,12 @@ void* mapPhysicalMemory(QWORD PhysicalAddress, int size)
 
   if (pos==-1)
   {
+    nosendchar[getAPICID()]=0;
     sendstring("mapPhysicalMemory: Out of virtual memory to map region.  Check the size and make sure you unmap as well\n");
-    while (FreezeOnMapAllocFail);
+    while (FreezeOnMapAllocFail)
+    {
+      outportb(0x80,0x02);
+    }
     return NULL;
   }
 
@@ -584,8 +638,10 @@ void unmapPhysicalMemoryGlobal(void *virtualaddress, int size)
   }
   else
   {
+    nosendchar[getAPICID()]=0;
     sendstringf("invalid global address (%6) given to unmapPhysicalMemoryGlobal\n",virtualaddress);
-    while (1);
+    ddDrawRectangle(0,DDVerticalResolution-100,100,100,0xff0000);
+    while (1) outportb(0x80,0x01);
   }
 
 
@@ -607,8 +663,10 @@ void unmapPhysicalMemory(void *virtualaddress, int size)
 
   if ((pos<0) || (pos>1024))
   {
+    nosendchar[getAPICID()]=0;
     sendstringf("%d: invalid address given to unmapPhysicalMemory (%6)\n",c->cpunr, virtualaddress);
-    while (1);
+    ddDrawRectangle(0,DDVerticalResolution-100,100,100,0xff0000);
+    while (1) outportb(0x80,0xce);
   }
 
   int i;
@@ -683,7 +741,7 @@ void SetPageToWriteThrough(void *address)
   }
 }
 
-void *addPhysicalPageToDBVM(QWORD address)
+void *addPhysicalPageToDBVM(QWORD address, int inuse)
 /*
  * Adds a physical page to the physicalPage List.
  * they will be mapped as virtual addresses at 0x1000000000 and beyond
@@ -742,8 +800,10 @@ void *addPhysicalPageToDBVM(QWORD address)
 
   if (pagetableentry->P)
   {
-    sendstringf("Assertion failure. Virtual address %6 was already present\n", VirtualAddress);
-    while (1);
+    nosendchar[getAPICID()]=0;
+    sendstringf("!Assertion failure! Virtual address %6 was already present (PhysicalPageListSize=%d)\n", VirtualAddress, PhysicalPageListSize);
+    ddDrawRectangle(0,DDVerticalResolution-100,100,100,0xff0000);
+    while (1) outportb(0x80,0xcf);
   }
 
   *(QWORD *)pagetableentry=address;
@@ -757,7 +817,11 @@ void *addPhysicalPageToDBVM(QWORD address)
 
 
   //now mark these 4096 bytes as available to the memory manager
-  AllocationInfoList[PhysicalPageListSize].BitMask=0;
+  if (!inuse)
+    AllocationInfoList[PhysicalPageListSize].BitMask=0;
+  else
+    AllocationInfoList[PhysicalPageListSize].BitMask=0xffffffffffffffffULL;
+
   PhysicalPageListSize++;
 
   if (PhysicalPageListSize>=PhysicalPageListMaxSize)
@@ -778,23 +842,30 @@ void *addPhysicalPageToDBVM(QWORD address)
   return (void *)VirtualAddress;
 }
 
-void addPhysicalPagesToDBVM(QWORD address, int count)
+void* addPhysicalPagesToDBVM(QWORD address, int count, int inuse)
 {
   int i;
+  void* result=NULL;
   address=address & 0xfffffffffffff000ULL; //sanitize
 
   csEnter(&AllocCS);
   for (i=0; i<count; i++)
-    addPhysicalPageToDBVM(address+i*4096);
+  {
+    void* va=addPhysicalPageToDBVM(address+i*4096, inuse);
+    if (i==0)
+      result=va;
+  }
   csLeave(&AllocCS);
+
+  return result;
 }
 
-void mmAddPhysicalPageListToDBVM(QWORD *pagelist, int count)
+void mmAddPhysicalPageListToDBVM(QWORD *pagelist, int count, int inuse)
 {
   int i;
   csEnter(&AllocCS);
   for (i=0; i<count; i++)
-    addPhysicalPageToDBVM(pagelist[i]);
+    addPhysicalPageToDBVM(pagelist[i], inuse);
   csLeave(&AllocCS);
 }
 
@@ -973,10 +1044,8 @@ void *malloc2(unsigned int size)
 
   }
 
+  nosendchar[getAPICID()]=0;
   sendstring("OUT OF MEMORY\n");
-  while (1)
-    jtagbp();
-
   return NULL; //still here so no memory allocated
 }
 
@@ -1116,8 +1185,10 @@ void *realloc(void *old, size_t size)
   }
   else
   {
+    nosendchar[getAPICID()]=0;
     sendstringf("realloc error\n");
-    while (1) ;
+    ddDrawRectangle(0,DDVerticalResolution-100,100,100,0xff0000);
+    while (1) outportb(0x80,0xd1);
   }
 }
 
@@ -1226,8 +1297,10 @@ void InitializeMM(UINT64 FirstFreeVirtualAddress)
 
   if (pagedirlvl4[pml4index].P) //pml4index should be 511
   {
+    nosendchar[getAPICID()]=0;
     sendstring("Assertion failed. pagedirlvl4[pml4index].P is not 0. It should be\n");
-    while (1);
+    ddDrawRectangle(0,DDVerticalResolution-100,100,100,0xff0000);
+    while (1) outportb(0x80,0xd1);
   }
   *(QWORD*)(&pagedirlvl4[pml4index])=getCR3();
   pagedirlvl4[pml4index].P=1;
@@ -1235,6 +1308,7 @@ void InitializeMM(UINT64 FirstFreeVirtualAddress)
   asm volatile ("": : :"memory");
   _invlpg(0xffffff8000000000ULL);
   //now I have access to all the paging info
+
 
   sendstring("Allocating the AllocationInfoList\n");
   //allocate memory for AllocationInfoList and map it at BASE_VIRTUAL_ADDRESS
@@ -1315,13 +1389,35 @@ void InitializeMM(UINT64 FirstFreeVirtualAddress)
   UINT64 currentaddress=FirstFreeVirtualAddress;
   while (currentaddress<0x007fffff)
   {
-    addPhysicalPageToDBVM(VirtualToPhysical((void *)currentaddress));
+    addPhysicalPageToDBVM(VirtualToPhysical((void *)currentaddress),0);
     currentaddress+=4096;
   }
 
-  if (extramemory)
-    addPhysicalPagesToDBVM(extramemory, extramemorysize);
+  sendstringf("extramemorysize=%d\n",extramemorysize);
 
+  if (extramemory && extramemorysize) //this is contiguous memory originally intended for allocs
+  {
+    if (contiguousmemoryPA==0) //no dedicated contiguous memory specified. Nibble some of the extra memory
+    {
+      int contiguousSize=extramemorysize>8?8:extramemorysize;
+
+      extramemory-=contiguousSize;
+      contiguousMemory=addPhysicalPagesToDBVM(extramemory, contiguousmemorysize, 1);
+      contiguousMemoryPagesFree=contiguousmemorysize;
+
+    }
+    addPhysicalPagesToDBVM(extramemory, extramemorysize,0);
+  }
+
+  sendstringf("contiguousmemorysize=%d\n",contiguousmemorysize);
+  if (contiguousmemoryPA)
+  {
+    contiguousMemory=addPhysicalPagesToDBVM(contiguousmemoryPA, contiguousmemorysize, 1);
+    contiguousMemoryPagesFree=contiguousmemorysize;
+  }
+
+
+  sendstringf("InitializeMM finished\n");
   //todo: add indexes to free memory blocks
 
   //use VMCALL_ADD_PHYSICAL_MEMORY for more
@@ -1408,9 +1504,15 @@ UINT64 VirtualToPhysical(void* address)
 
 
   if (pagedescriptor->PS)
-    r=*(UINT64 *)pagedescriptor & 0xffffffffffffe000ULL;
+  {
+    r=*(UINT64 *)pagedescriptor & 0xffffffffffe00000ULL;
+    r=r | ((UINT64)address & 0x1fffff);
+  }
   else
+  {
     r=*(UINT64 *)pagedescriptor & 0xfffffffffffff000ULL;
+    r=r | ((UINT64)address & 0xfff);
+  }
 
   return r;
 }

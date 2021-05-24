@@ -4,8 +4,11 @@ unit VEHDebugger;
 
 interface
 
+{$ifdef windows}
 uses
-  jwaNtStatus, Windows, Classes, SysUtils,symbolhandler, symbolhandlerstructs,
+
+  jwaNtStatus, Windows,
+  Classes, SysUtils,symbolhandler, symbolhandlerstructs,
   VEHDebugSharedMem,cefuncproc, autoassembler,newkernelhandler,DebuggerInterface,
   Clipbrd;
 
@@ -53,9 +56,11 @@ type
     constructor create;
   end;
 
+{$endif}
 
 implementation
 
+{$ifdef windows}
 uses ProcessHandlerUnit, Globals, dialogs;
 
 resourcestring
@@ -123,7 +128,7 @@ end;
 constructor TVEHDebugInterface.create;
 begin
   inherited create;
-  fDebuggerCapabilities:=[dbcSoftwareBreakpoint,dbcHardwareBreakpoint, dbcExceptionBreakpoint];
+  fDebuggerCapabilities:=fDebuggerCapabilities+[dbcSoftwareBreakpoint,dbcHardwareBreakpoint, dbcExceptionBreakpoint];
   name:='VEH Debugger';
 
   fmaxSharedBreakpointCount:=4;
@@ -161,6 +166,7 @@ function TVEHDebugInterface.SetThreadContext(hThread: THandle; const lpContext: 
 var c: PContext;
 {$ifdef cpu64}
     c32: PContext32 absolute c;
+    i: integer;
 {$endif}
 begin
 
@@ -203,6 +209,8 @@ begin
 
       CopyMemory(@c32.ext, @lpContext.fltsave,sizeof(c32.ext));
 
+      for i:=0 to 7 do
+        CopyMemory(@c32.FloatSave.RegisterArea[i*10], @lpContext.fltsave.FloatRegisters[i], 10);
 
     end else c^:=lpContext;
 
@@ -477,9 +485,13 @@ var
   err: boolean;
 begin
   try
-    processhandler.processid:=dwProcessID;
-    Open_Process;
-    symhandler.reinitialize;
+    if dwProcessID<>processhandler.processid then
+    begin
+      processhandler.processid:=dwProcessID;
+
+      Open_Process;
+      symhandler.reinitialize;
+    end;
 
     is64bit:=processhandler.is64Bit;
     if is64bit then
@@ -530,6 +542,7 @@ begin
 
     Heartbeat:=THeartBeat.Create(true);
     THeartBeat(Heartbeat).owner:=self;
+    HeartBeat.Priority:=tpHighest;
     HeartBeat.Start;
 
     VEHDebugView.ThreadWatchMethod:=0; //vehthreadwatchmethod;
@@ -721,6 +734,7 @@ begin
 
   lastthreadpoll:=GetTickCount64;
 end;
+{$endif}
 
 end.
 

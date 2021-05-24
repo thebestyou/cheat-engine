@@ -4,7 +4,9 @@ unit addressparser;
 
 interface
 
-uses LCLIntf,SysUtils,dialogs,symbolhandler, NewKernelHandler;
+uses
+  {$ifdef darwin}macport,{$endif}
+  LCLIntf,SysUtils,dialogs,symbolhandler, NewKernelHandler;
 
 resourcestring
   rsAPThisIsNotAValidAddress = 'This is not a valid address';
@@ -49,7 +51,7 @@ function getaddress(S: string):ptrUint; //for old code
 
 implementation
 
-uses memorybrowserformunit;
+uses memorybrowserformunit, StrUtils;
 
 
 procedure TAddressParser.seperator;
@@ -335,7 +337,25 @@ end;
 function TAddressParser.getBaseAddress(s: string):ptruint;
 var maxvalue: ptruint;
     i: integer;
+    part: string;
 begin
+  //strip of the +XXXX part if XXXX is a hexadecimal value
+  i:=RPos('+',s);
+  if i>0 then
+  begin
+    part:=copy(s,i+1);
+    try
+      strtoint('$'+part);
+      //still here so yes
+      s:=copy(s,1,i-1);
+      exit(getAddress(s,true));
+    except
+
+    end;
+  end;
+
+  //still here, use the 'old' method
+
   getaddress(s, true);
   maxvalue:=0;
   for i:=0 to length(values)-1 do

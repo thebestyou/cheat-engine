@@ -5,8 +5,13 @@ unit aboutunit;
 interface
 
 uses
-  windows, LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
-  Dialogs, StdCtrls, ExtCtrls, LResources,shellapi, vmxfunctions, NewKernelHandler;
+  {$ifdef darwin}
+  macport,
+  {$endif}
+  {$ifdef windows}
+  windows,shellapi,
+  {$endif}LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
+  Dialogs, StdCtrls, ExtCtrls, LResources, vmxfunctions, NewKernelHandler, betterControls;
 
 type
 
@@ -35,6 +40,7 @@ type
     Label5: TLabel;
     Image1: TImage;
     Button1: TButton;
+    Label6: TLabel;
     Label8: TLabel;
     Label9: TLabel;
     Panel1: TPanel;
@@ -71,7 +77,7 @@ uses tlgUnit,MainUnit2, MainUnit, dbvmLoadManual;
 
 
 resourcestring
-  rsYourSystemDOESNOTSupportDBVM = 'Your system DOES NOT support DBVM';
+  rsYourSystemDOESNOTSupportDBVM = 'Your system does not support DBVM. Perhaps it is already inside a VM';
   rsThisMeansThatYouWillNeedANewCpuIntelToBeAbleToUseT = 'This means that you will need a new cpu (intel) to be able to use the advanced dbvm options';
   rsYourSystemIsRunningDBVMVersion = 'Your system is running DBVM version %s (%.0n bytes free (%d pages))';
   rsThisMeansThatYourSystemIsRunningDbvm = 'This means that your system is running dbvm. This means ce will make use of some advanced tools that are otherwise unavailable';
@@ -155,6 +161,7 @@ end;
 procedure TAbout.lblDBVMClick(Sender: TObject; Button: TMouseButton;
   Shift: TShiftState; X, Y: Integer);
 begin
+  {$ifdef windows}
   //if not isRunningDBVM then
   begin
     //if not isDBVMCapable then exit;
@@ -185,11 +192,12 @@ begin
       end;
     end
     else
-      if frmDBVMLoadManual<>nil then 
+      if frmDBVMLoadManual<>nil then
         frmDBVMLoadManual.SetFocus
-      else 
+      else
         tfrmDBVMLoadManual.create(Application).Show;
   end;
+  {$endif}
 end;
 
 procedure TAbout.UpdateDBVMStatus;
@@ -200,26 +208,32 @@ var
   dmemfree: double;
   vers: DWORD;
 
-  oldvmx_password1: DWORD;
+  oldvmx_password1: QWORD;
   oldvmx_password2: DWORD;
+  oldvmx_password3: QWORD;
 
 begin
+  {$ifdef windows}
   oldvmx_password1:=vmx_password1;
   oldvmx_password2:=vmx_password2;
+  oldvmx_password3:=vmx_password3;
   OutputDebugString('UpdateDBVMStatus');
 
-  if (vmx_password1=0) and (vmx_password2=0) then
+  if (vmx_password1=0) and (vmx_password2=0) and (vmx_password3=0) then
   begin
     OutputDebugString('vmx_password1=0');
     OutputDebugString('vmx_password2=0');
+    OutputDebugString('vmx_password3=0');
     vmx_password1:=$76543210;
     vmx_password2:=$fedcba98;
+    vmx_password3:=$90909090;
   end;
 
   if dbvm_version=0 then
   begin
     vmx_password1:=$76543210;
     vmx_password2:=$fedcba98;
+    vmx_password3:=$90909090;
   end;
 
   if (dbvm_version>0) then
@@ -258,6 +272,10 @@ begin
 
   vmx_password1:=oldvmx_password1;
   vmx_password2:=oldvmx_password2;
+  vmx_password3:=oldvmx_password3;
+  {$else}
+  lblDBVM.visible:=false;
+  {$endif}
 end;
 
 

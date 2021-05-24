@@ -1,3 +1,5 @@
+// Copyright Cheat Engine. All Rights Reserved.
+
 unit disassembler;
 
 {$MODE Delphi}
@@ -11,6 +13,12 @@ uses unixporthelper, sysutils, byteinterpreter, symbolhandler, NewKernelHandler,
 
 {$ifdef windows}
 uses windows, imagehlp,sysutils,LCLIntf,byteinterpreter, symbolhandler, symbolhandlerstructs,
+  CEFuncProc, NewKernelHandler, ProcessHandlerUnit, LastDisassembleData, disassemblerarm,
+  commonTypeDefs, maps, math,vextypedef, betterControls;
+{$endif}
+
+{$ifdef darwin}
+uses LCLIntf, LCLType, macport, macportdefines, sysutils,byteinterpreter, symbolhandler, symbolhandlerstructs,
   CEFuncProc, NewKernelHandler, ProcessHandlerUnit, LastDisassembleData, disassemblerarm,
   commonTypeDefs, maps, math,vextypedef;
 {$endif}
@@ -85,6 +93,7 @@ type
     fsyntaxhighlighting: boolean;
     fOnDisassembleOverride: TDisassembleEvent;
     fOnPostDisassemble: TDisassembleEvent;
+    faggressivealignment: boolean;
 
 
     modrmposition: TMRPos;
@@ -141,6 +150,7 @@ type
     isdefault: boolean;
     showsymbols: boolean;
     showmodules: boolean;
+    showsections: boolean;
     dataOnly: boolean;
 
     is64bit: boolean;
@@ -154,7 +164,8 @@ type
     context: PCONTEXT;
 
 //    showvalues: boolean;
-    function disassemble(var offset: ptrUint; var description: string): string;
+    function disassemble(var offset: ptrUint; var description: string): string; overload;
+    function disassemble(var offset: ptrUint): string; overload;
     procedure splitDisassembledString(disassembled: string; showvalues: boolean; var address: string; var bytes: string; var opcode: string; var special:string; context: PContext=nil);
 
     function DecodeLastParametersToString: string; //returns the special line splitDisassemblerstring used to return
@@ -166,9 +177,11 @@ type
     property syntaxhighlighting: boolean read fsyntaxhighlighting write setSyntaxHighlighting;
     property OnDisassembleOverride: TDisassembleEvent read fOnDisassembleOverride write fOnDisassembleOverride;
     property OnPostDisassemble: TDisassembleEvent read fOnPostDisassemble write fOnPostDisassemble;
+    property aggressivealignment: boolean read faggressivealignment write faggressivealignment;
   end;
 
 
+  {$ifdef windows}
   TCR3Disassembler=class(TDisassembler)
   private
     fcr3: QWORD;
@@ -179,6 +192,7 @@ type
     property CR3: QWORD read fCR3 write setCR3;
 
   end;
+  {$endif}
 
 
 
@@ -232,8 +246,15 @@ uses Assemblerunit, StrUtils, Parsers, memoryQuery;
 {$ifdef windows}
 uses Assemblerunit,CEDebugger, debughelper, StrUtils, debuggertypedefinitions,
   Parsers, memoryQuery, binutils, luacaller, vmxfunctions, frmcodefilterunit,
-  BreakpointTypeDef;
+  BreakpointTypeDef, frmEditHistoryUnit;
 {$endif}
+
+{$ifdef darwin}
+uses Assemblerunit,CEDebugger, debughelper, StrUtils, debuggertypedefinitions,
+  Parsers, memoryQuery, (*binutils,*) LuaCaller, (*vmxfunctions, frmcodefilterunit, *)
+  BreakpointTypeDef, frmEditHistoryUnit;
+{$endif}
+
 
 
 function registerGlobalDisassembleOverride(m: TDisassembleEvent): integer;
@@ -258,7 +279,7 @@ procedure unregisterGlobalDisassembleOverride(id: integer);
 begin
   if id<length(GlobalDisassembleOverrides) then
   begin
-    {$ifndef unix}
+    {$ifndef jni}
     CleanupLuaCall(TMethod(GlobalDisassembleOverrides[id]));
     {$endif}
     GlobalDisassembleOverrides[id]:=nil;
@@ -1082,7 +1103,7 @@ begin
                     1: result:='ax';
                     2: result:='al';
                     3: result:='mm0';
-                    4: result:='xmm0';
+                    4: if opcodeflags.L then result:='ymm0' else result:='xmm0';
                   end;
 
               1:  case inst of
@@ -1090,7 +1111,7 @@ begin
                     1: result:='cx';
                     2: result:='cl';
                     3: result:='mm1';
-                    4: result:='xmm1';
+                    4: if opcodeflags.L then result:='ymm1' else result:='xmm1';
                   end;
 
               2:  case inst of
@@ -1098,7 +1119,7 @@ begin
                     1: result:='dx';
                     2: result:='dl';
                     3: result:='mm2';
-                    4: result:='xmm2';
+                    4: if opcodeflags.L then result:='ymm2' else result:='xmm2';
                   end;
 
               3:  case inst of
@@ -1106,7 +1127,7 @@ begin
                     1: result:='bx';
                     2: result:='bl';
                     3: result:='mm3';
-                    4: result:='xmm3';
+                    4: if opcodeflags.L then result:='ymm3' else result:='xmm3';
                   end;
 
               4:  case inst of
@@ -1114,7 +1135,7 @@ begin
                     1: result:='sp';
                     2: if rexprefix<>0 then result:='spl' else result:='ah';
                     3: result:='mm4';
-                    4: result:='xmm4';
+                    4: if opcodeflags.L then result:='ymm4' else result:='xmm4';
                   end;
 
               5:  case inst of
@@ -1122,7 +1143,7 @@ begin
                     1: result:='bp';
                     2: if rexprefix<>0 then result:='bpl' else result:='ch';
                     3: result:='mm5';
-                    4: result:='xmm5';
+                    4: if opcodeflags.L then result:='ymm5' else result:='xmm5';
                   end;
 
               6:  case inst of
@@ -1130,7 +1151,7 @@ begin
                     1: result:='si';
                     2: if rexprefix<>0 then result:='sil' else result:='dh';
                     3: result:='mm6';
-                    4: result:='xmm6';
+                    4: if opcodeflags.L then result:='ymm6' else result:='xmm6';
                   end;
 
               7:  case inst of
@@ -1138,7 +1159,7 @@ begin
                     1: result:='di';
                     2: if rexprefix<>0 then result:='dil' else result:='bh';
                     3: result:='mm7';
-                    4: result:='xmm7';
+                    4: if opcodeflags.L then result:='ymm7' else result:='xmm7';
                   end;
 
               8: case inst of
@@ -1146,7 +1167,7 @@ begin
                     1: result:='r8w';
                     2: result:='r8l';
                     3: result:='mm8';
-                    4: result:='xmm8';
+                    4: if opcodeflags.L then result:='ymm8' else result:='xmm8';
                  end;
 
               9: case inst of
@@ -1154,7 +1175,7 @@ begin
                    1: result:='r9w';
                    2: result:='r9l';
                    3: result:='mm9';
-                   4: result:='xmm9';
+                   4: if opcodeflags.L then result:='ymm9' else result:='xmm9';
                  end;
 
              10: case inst of
@@ -1162,7 +1183,7 @@ begin
                    1: result:='r10w';
                    2: result:='r10l';
                    3: result:='mm10';
-                   4: result:='xmm10';
+                   4: if opcodeflags.L then result:='ymm10' else result:='xmm10';
                  end;
 
              11: case inst of
@@ -1170,7 +1191,7 @@ begin
                    1: result:='r11w';
                    2: result:='r11l';
                    3: result:='mm11';
-                   4: result:='xmm11';
+                   4: if opcodeflags.L then result:='ymm11' else result:='xmm11';
                  end;
 
              12: case inst of
@@ -1178,7 +1199,7 @@ begin
                    1: result:='r12w';
                    2: result:='r12l';
                    3: result:='mm12';
-                   4: result:='xmm12';
+                   4: if opcodeflags.L then result:='ymm12' else result:='xmm12';
                  end;
 
              13: case inst of
@@ -1186,7 +1207,7 @@ begin
                    1: result:='r13w';
                    2: result:='r13l';
                    3: result:='mm13';
-                   4: result:='xmm13';
+                   4: if opcodeflags.L then result:='ymm13' else result:='xmm13';
                  end;
 
              14: case inst of
@@ -1194,7 +1215,7 @@ begin
                    1: result:='r14w';
                    2: result:='r14l';
                    3: result:='mm14';
-                   4: result:='xmm14';
+                   4: if opcodeflags.L then result:='ymm14' else result:='xmm14';
                  end;
 
              15: case inst of
@@ -1202,7 +1223,7 @@ begin
                    1: result:='r15w';
                    2: result:='r15l';
                    3: result:='mm15';
-                   4: result:='xmm15';
+                   4: if opcodeflags.L then result:='ymm15' else result:='xmm15';
                  end;
             end;
 
@@ -1489,11 +1510,14 @@ begin
     end;
     debuggerthread.unlockbplist;
 
+    {$ifdef windows}
     if (frmCodeFilter<>nil) then frmcodefilter.isBreakpoint(address, b);
+    {$endif}
   end;
 
-
+  {$ifdef windows}
   dbvm_isbreakpoint(address,PA,BO,b);
+  {$endif}
 end;
 {$endif}
 
@@ -1502,6 +1526,7 @@ begin
   result:=defaultDisassembler.disassemble(offset,description);
 end;
 
+{$ifdef windows}
 procedure TCR3Disassembler.setCR3(c: QWORD);
 begin
   fcr3:=c and MAXPHYADDRMASKPB;
@@ -1513,7 +1538,7 @@ begin
   ReadProcessMemoryCR3(fcr3,pointer(address), destination, size, actualread);
   result:=actualread;
 end;
-
+ {$endif}
 
 function TDisassembler.readMemory(address: ptruint; destination: pointer; size: integer): integer;
 //reads the bytes at the given address and returns the number of bytes read
@@ -1525,14 +1550,22 @@ var
 begin
   actualread:=0;
 
+  {$ifdef windows}
   ReadProcessMemoryWithCloakSupport(processhandle,pointer(address),destination,size,actualread);
+  {$else}
+  ReadProcessMemory(processhandle,pointer(address),destination,size,actualread);
+  {$endif}
   if (actualread=0) and ((address+size and qword($fffffffffffff000))>(address and qword($fffffffffffff000))) then //did not read a single byte and overlaps a pageboundary
   begin
     p1:=0;
     repeat
       i:=min(size, integer(4096-(address and $fff)));
       actualread:=0;
+      {$ifdef windows}
       ReadProcessMemoryWithCloakSupport(processhandle,pointer(address),destination,i,actualread);
+      {$else}
+      ReadProcessMemory(processhandle,pointer(address),destination,i,actualread);
+      {$endif}
 
       inc(p1,actualread);
       address:=address+actualread;
@@ -1546,7 +1579,11 @@ begin
     result:=actualread;
 end;
 
-
+function TDisassembler.disassemble(var offset: ptrUint): string;
+var ignore: string;
+begin
+  result:=disassemble(offset, ignore);
+end;
 
 function TDisassembler.disassemble(var offset: ptrUint; var description: string): string;
 var
@@ -1586,7 +1623,7 @@ begin
   LastDisassembleData.isfloat64:=false;
   LastDisassembleData.iscloaked:=false;
   LastDisassembleData.commentsoverride:='';
-  {$ifndef unix}
+  {$ifdef windows}
   if defaultBinutils<>nil then
   begin
     //use this
@@ -1735,13 +1772,15 @@ begin
 
   if actualread>0 then
   begin
-    //I HATE THESE...   (I propably will not add them all, but I'll see how far I get)
-
     {$ifndef jni}
     if debuggerthread<>nil then
       for i:=0 to actualread-1 do
         if memory[i]=$cc then
-          memory[i]:=debuggerthread.getrealbyte(offset+i);
+        begin
+          //memory[i]:=debuggerthread.getrealbyte(offset+i);
+
+          repairbreakbyte(offset+i, memory[i]);
+        end;
     {$endif}
 
 
@@ -1837,10 +1876,7 @@ begin
 
     end;
 
-    {$ifdef windows}
-    if (memory[0]=$cc) then //if it's a int3 breakpoint and there is a debugger attached check if it's a bp
-      repairbreakbyte(startoffset, memory[0]);
-    {$endif}
+
 
 
     prefixsize:=length(LastDisassembleData.bytes);
@@ -1942,7 +1978,9 @@ begin
 
     case memory[0] of  //opcode
       $00 : begin
-              if (memory[1]=$55) and (memory[2]=$89) and (memory[3]=$e5) then
+
+
+              if (aggressivealignment and (((offset) and $f)=0) and (memory[1]<>0) ) or ((memory[1]=$55) and (memory[2]=$89) and (memory[3]=$e5)) then
               begin
                 description:='Filler';
                 lastdisassembledata.opcode:='db';
@@ -2798,7 +2836,18 @@ begin
                           0:  begin
                                 description:='multibyte nop';
                                 lastdisassembledata.opcode:='nop';
-                                lastdisassembledata.parameters:=modrm(memory,prefix2,2,0,last);
+
+
+                                if Rex_W then
+                                  lastdisassembledata.parameters:=modrm(memory,prefix2,2,0,last,64)
+                                else
+                                begin
+                                  if $66 in prefix2 then
+                                    lastdisassembledata.parameters:=modrm(memory,prefix2,2,0,last,16)
+                                  else
+                                    lastdisassembledata.parameters:=modrm(memory,prefix2,2,0,last,32)
+                                end;
+
                                 inc(offset,last-1);
                               end;
                         end;
@@ -2899,7 +2948,7 @@ begin
                           else
                             lastdisassembledata.opcode:='cvtsi2sd';
 
-                          lastdisassembledata.parameters:=xmm(memory[2])+modrm(memory,prefix2,2,0,last,mRight);
+                          lastdisassembledata.parameters:=xmm(memory[2])+modrm(memory,prefix2,2,4,last,mRight);
 
                           inc(offset,last-1);
                         end
@@ -2913,7 +2962,7 @@ begin
                           else
                             lastdisassembledata.opcode:='cvtsi2ss';
 
-                          lastdisassembledata.parameters:=xmm(memory[2])+modrm(memory,prefix2,2,0,last,mRight);
+                          lastdisassembledata.parameters:=xmm(memory[2])+modrm(memory,prefix2,2,4,last,mRight);
 
                           inc(offset,last-1);
                         end
@@ -2984,6 +3033,7 @@ begin
                           else
                             lastdisassembledata.opcode:='cvttss2si';
 
+                          opcodeflags.skipExtraReg:=true;
                           lastdisassembledata.parameters:=r32(memory[2])+modrm(memory,prefix2,2,4,last, mRight);
                           inc(offset,last-1);
                         end
@@ -3105,6 +3155,8 @@ begin
                             lastdisassembledata.opcode:='vcomiss'
                           else
                             lastdisassembledata.opcode:='comiss';
+
+                          opcodeflags.skipExtraReg:=true;
                           lastdisassembledata.parameters:=xmm(memory[2])+modrm(memory,prefix2,2,4,last,mRight);
                           lastdisassembledata.datasize:=4;
                           inc(offset,last-1);
@@ -3466,7 +3518,7 @@ begin
                                  begin
                                    if hasvex then
                                    begin
-                                     LastDisassembleData.opcode:='vblendvpd';
+                                     LastDisassembleData.opcode:='vblendvpd invalid';
                                      lastdisassembledata.parameters:=xmm(memory[3])+modrm(memory,prefix2,3,4,last, mRight);
                                      lastdisassembledata.parameters:=lastdisassembledata.parameters+','+regnrtostr(rtXMM,memory[last]);
                                      inc(offset,1);
@@ -3474,7 +3526,7 @@ begin
                                    else
                                    begin
                                      LastDisassembleData.opcode:='blendvpd';
-                                     lastdisassembledata.parameters:=xmm(memory[3])+modrm(memory,prefix2,3,4,last, mRight)+','+regnrtostr(rtXMM,0);
+                                     lastdisassembledata.parameters:=xmm(memory[3])+modrm(memory,prefix2,3,4,last, mRight)+','+colorreg+regnrtostr(rtXMM,0)+endcolor;
                                    end;
                                    inc(offset,last-1);
                                  end;
@@ -5004,7 +5056,7 @@ begin
                                end;
 
             {0f}{38}     $f0: begin
-                                 if $f2 in prefix then
+                                 if $f2 in prefix2 then
                                  begin
                                    description:='Accumulate CRC32 value';
                                    LastDisassembleData.opcode:='crc32';
@@ -5015,7 +5067,7 @@ begin
                                  begin
                                    description:='Move data after swapping bytes';
                                    LastDisassembleData.opcode:='movbe';
-                                   if $66 in prefix then
+                                   if $66 in prefix2 then
                                      lastdisassembledata.parameters:=r16(memory[3])+modrm(memory,prefix2,3,2,last,mRight)
                                    else
                                      lastdisassembledata.parameters:=r32(memory[3])+modrm(memory,prefix2,3,0,last, mRight);
@@ -5024,7 +5076,7 @@ begin
                                end;
 
                           $f1: begin
-                                 if $f2 in prefix then
+                                 if $f2 in prefix2 then
                                  begin
                                    description:='Accumulate CRC32 value';
                                    LastDisassembleData.opcode:='crc32';
@@ -5551,6 +5603,22 @@ begin
                                  end;
                                end;
 
+               {0f}{3a}   $21: begin    //C4 E3 79 21 80 B8 00 00 00 20
+                                 if $66 in prefix2 then
+                                 begin
+                                   description:='Insert Scalar Single-Precision Floating-Point Value';
+                                   if hasvex then
+                                     LastDisassembleData.opcode:='vinsertps'
+                                   else
+                                     LastDisassembleData.opcode:='insertps';
+
+                                   lastdisassembledata.parameters:=xmm(memory[3])+modrm(memory,prefix2,3,4,last,mRight)+',';
+                                   lastdisassembledata.parameters:=lastdisassembledata.parameters+inttohex(memory[last],2);
+                                   inc(last);
+                                   inc(offset,last-1);
+                                 end;
+                               end;
+
                           $22: begin
                                  if $66 in prefix2 then
                                  begin
@@ -5684,6 +5752,47 @@ begin
                                   end;
                                 end;
                               end;
+
+              {0f}{3a}   $4a: begin
+                                if $66 in prefix2 then
+                                begin
+                                  if hasvex then
+                                  begin
+                                    description:='Variable Blend Packed Single Precision Floating-Point Values';
+                                    LastDisassembleData.opcode:='vblendvps';
+
+                                    lastdisassembledata.parameters:=xmm(memory[3])+modrm(memory,prefix2,3,4,last,mRight)+',';
+                                    if opcodeflags.L then
+                                      lastdisassembledata.parameters:=lastdisassembledata.parameters+colorreg+regnrtostr(rtYMM, memory[last] shr 4 and $f)+endcolor
+                                    else
+                                      lastdisassembledata.parameters:=lastdisassembledata.parameters+colorreg+regnrtostr(rtXMM, memory[last] shr 4 and $f)+endcolor;
+
+                                    inc(last);
+                                    inc(offset,last-1);
+                                  end;
+                                end;
+                              end;
+
+              {0f}{3a}   $4b: begin
+                                if $66 in prefix2 then
+                                begin
+                                  if hasvex then
+                                  begin
+                                    description:='Variable Blend Packed Double Precision Floating-Point Values';
+                                    LastDisassembleData.opcode:='vblendvpd';
+
+                                    lastdisassembledata.parameters:=xmm(memory[3])+modrm(memory,prefix2,3,4,last,mRight)+',';
+                                    if opcodeflags.L then
+                                      lastdisassembledata.parameters:=lastdisassembledata.parameters+colorreg+regnrtostr(rtYMM, memory[last] shr 4 and $f)+endcolor
+                                    else
+                                      lastdisassembledata.parameters:=lastdisassembledata.parameters+colorreg+regnrtostr(rtXMM, memory[last] shr 4 and $f)+endcolor;
+
+                                    inc(last);
+                                    inc(offset,last-1);
+                                  end;
+                                end;
+                              end;
+
 
               {0f}{3a}   $60: begin
                                 if $66 in prefix2 then
@@ -7240,17 +7349,18 @@ begin
                                   else
                                     lastdisassembledata.opcode:='psrlq';
                                   lastdisassembledata.parameters:= modrm(memory,prefix2,2,4,last,mRight);
-                                  lastdisassembledata.parameters:=lastdisassembledata.parameters+inttohexs(memory[last],2);
+                                  lastdisassembledata.parameters:=lastdisassembledata.parameters+','+inttohexs(memory[last],2);
                                   inc(offset,3);
                                 end
                                 else
                                 begin
                                   description:='packed shift right logical';
                                   lastdisassembledata.opcode:='psrlq';
-                                  lastdisassembledata.parameters:= modrm(memory,prefix2,2,3,last);
-                                  lastdisassembledata.parameters:=lastdisassembledata.parameters+inttohexs(memory[last],2);
+                                  lastdisassembledata.parameters:= modrm(memory,prefix2,2,3,last,mRight);
+                                  lastdisassembledata.parameters:=lastdisassembledata.parameters+','+inttohexs(memory[last],2);
                                   inc(offset,3);
                                 end;
+                                delete(lastdisassembledata.parameters,1,1);
                               end;
 
                           3 : begin
@@ -7263,9 +7373,10 @@ begin
                                     lastdisassembledata.opcode:='psrldq';
 
                                   lastdisassembledata.parameters:= modrm(memory,prefix2,2,4,last,mRight);
-                                  lastdisassembledata.parameters:=lastdisassembledata.parameters+inttohexs(memory[last],2);
+                                  lastdisassembledata.parameters:=lastdisassembledata.parameters+','+inttohexs(memory[last],2);
                                   inc(offset,3);
                                 end;
+                                delete(lastdisassembledata.parameters,1,1);
                               end;
 
                           6 : begin
@@ -7277,17 +7388,18 @@ begin
                                   else
                                     lastdisassembledata.opcode:='psllq';
                                   lastdisassembledata.parameters:= modrm(memory,prefix2,2,4,last,mRight);
-                                  lastdisassembledata.parameters:=lastdisassembledata.parameters+inttohexs(memory[last],2);
+                                  lastdisassembledata.parameters:=lastdisassembledata.parameters+','+inttohexs(memory[last],2);
                                   inc(offset,3);
                                 end
                                 else
                                 begin
                                   description:='packed shift left logical';
                                   lastdisassembledata.opcode:='psllq';
-                                  lastdisassembledata.parameters:= modrm(memory,prefix2,2,3,last);
-                                  lastdisassembledata.parameters:=lastdisassembledata.parameters+inttohexs(memory[last],2);
+                                  lastdisassembledata.parameters:= modrm(memory,prefix2,2,3,last,mRight);
+                                  lastdisassembledata.parameters:=lastdisassembledata.parameters+','+inttohexs(memory[last],2);
                                   inc(offset,3);
                                 end;
+                                delete(lastdisassembledata.parameters,1,1);
                               end;
 
                           7 : begin
@@ -7299,7 +7411,9 @@ begin
                                   else
                                     lastdisassembledata.opcode:='pslldq';
                                   lastdisassembledata.parameters:= modrm(memory,prefix2,2,4,last,mRight);
-                                  lastdisassembledata.parameters:=lastdisassembledata.parameters+inttohexs(memory[last],2);
+                                  lastdisassembledata.parameters:=lastdisassembledata.parameters+','+inttohexs(memory[last],2);
+
+                                  delete(lastdisassembledata.parameters,1,1);
                                   inc(offset,3);
                                 end;
                               end;
@@ -8694,7 +8808,7 @@ begin
 
                           lastdisassembledata.parametervaluetype:=dvtvalue;
                           lastdisassembledata.parametervalue:=memory[last];
-                          lastdisassembledata.parameters:=lastdisassembledata.parameters+inttohexs(lastdisassembledata.parametervalue,2);
+                          lastdisassembledata.parameters:=lastdisassembledata.parameters+','+inttohexs(lastdisassembledata.parametervalue,2);
                           inc(offset,last);
                         end
                         else
@@ -8708,7 +8822,7 @@ begin
                           lastdisassembledata.parameters:=xmm(memory[2])+modrm(memory,prefix2,2,4,last,128,0,mRight);
                           lastdisassembledata.parametervaluetype:=dvtvalue;
                           lastdisassembledata.parametervalue:=memory[last];
-                          lastdisassembledata.parameters:=lastdisassembledata.parameters+inttohexs(lastdisassembledata.parametervalue,2);
+                          lastdisassembledata.parameters:=lastdisassembledata.parameters+','+inttohexs(lastdisassembledata.parametervalue,2);
                           lastdisassembledata.datasize:=4;
                           inc(offset,last);
                         end
@@ -8724,7 +8838,7 @@ begin
                             lastdisassembledata.parameters:=xmm(memory[2])+modrm(memory,prefix2,2,4,last,128,0,mRight);
                             lastdisassembledata.parametervaluetype:=dvtvalue;
                             lastdisassembledata.parametervalue:=memory[last];
-                            lastdisassembledata.parameters:=lastdisassembledata.parameters+inttohexs(lastdisassembledata.parametervalue,2);
+                            lastdisassembledata.parameters:=lastdisassembledata.parameters+','+inttohexs(lastdisassembledata.parametervalue,2);
                             inc(offset,last);
                           end
                           else
@@ -8737,7 +8851,7 @@ begin
                             lastdisassembledata.parameters:=xmm(memory[2])+modrm(memory,prefix2,2,4,last,128,0,mRight);
                             lastdisassembledata.parametervaluetype:=dvtvalue;
                             lastdisassembledata.parametervalue:=memory[last];
-                            lastdisassembledata.parameters:=lastdisassembledata.parameters+inttohexs(lastdisassembledata.parametervalue,2);
+                            lastdisassembledata.parameters:=lastdisassembledata.parameters+','+inttohexs(lastdisassembledata.parametervalue,2);
                             lastdisassembledata.datasize:=4;
                             inc(offset,last);
                           end;
@@ -8929,7 +9043,7 @@ begin
                                 begin
                                   description:='read random SEED';
                                   lastdisassembledata.opcode:='rdseed';
-                                  if $66 in prefix then
+                                  if $66 in prefix2 then
                                     lastdisassembledata.parameters:=modrm(memory,prefix2,2,1,last)
                                   else
                                     lastdisassembledata.parameters:=modrm(memory,prefix2,2,0,last);
@@ -10558,8 +10672,16 @@ begin
 
             //prefix bytes need fixing
       $3f : begin  //aas
-              lastdisassembledata.opcode:='aas';
-              description:='ascii adjust al after subtraction';
+              if processhandler.is64bit then
+              begin
+                lastdisassembledata.opcode:='db';
+                lastdisassembledata.parameters:=inttohexs($3f,1);
+              end
+              else
+              begin
+                lastdisassembledata.opcode:='aas';
+                description:='ascii adjust al after subtraction';
+              end;
             end;
 
       $40..$47 :
@@ -11921,6 +12043,8 @@ begin
       $90 : begin
               description:='no operation';
               lastdisassembledata.opcode:='nop';
+              if prefixsize>0 then
+                lastdisassembledata.parameters:=inttohexs(prefixsize+1,1);
             end;
 
       $91..$97:
@@ -13283,6 +13407,23 @@ begin
                       begin
                         description:='unsigned divide by 2, cl times';
                         lastdisassembledata.opcode:='shr';
+                        lastdisassembledata.parameters:=modrm(memory,prefix2,1,0,last)+colorreg+'cl'+endcolor;
+                        inc(offset,last-1);
+                      end;
+                    end;
+
+                6:  begin
+                      if $66 in prefix2 then
+                      begin
+                        description:='Undefined';
+                        lastdisassembledata.opcode:='ud d3 /6';
+                        lastdisassembledata.parameters:=modrm(memory,prefix2,1,1,last,16)+colorreg+'cl'+endcolor;
+                        inc(offset,last-1);
+                      end
+                      else
+                      begin
+                        description:='Undefined';
+                        lastdisassembledata.opcode:='ud d3 /6';
                         lastdisassembledata.parameters:=modrm(memory,prefix2,1,0,last)+colorreg+'cl'+endcolor;
                         inc(offset,last-1);
                       end;
@@ -15213,6 +15354,7 @@ begin
         nop
         end;
         MessageBox(0,pchar(inttohex(startoffset,8)+'disassembler error 3'),'debug here',MB_OK);
+
       end;
     end;
 
@@ -15263,8 +15405,11 @@ begin
     LastDisassembleData.opcode:='??';
     inc(offset);
   end;
-
+{$ifdef windows}
   LastDisassembleData.iscloaked:=hasCloakedRegionInRange(LastDisassembleData.address, length(LastDisassembleData.Bytes), VA, PA);
+{$else}
+LastDisassembleData.iscloaked:=false;
+{$endif}
 
 
   if not dataonly then
@@ -15291,9 +15436,9 @@ begin
     end;
   end;
 
-  for i:=32 to 63 do
+{  for i:=32 to 63 do
     if _memory[i]<>$ce then
-      raise exception.create('Memory corruption in the disassembler');
+      raise exception.create('Memory corruption in the disassembler'); }
   except
     on e:exception do
     begin
@@ -15307,16 +15452,25 @@ function TDisassembler.getLastBytestring: string;
 var
   i,j: integer;
   cloaked:boolean=false;
+  changed:boolean=false;
   VA,PA: qword;
 begin
   result:='';
   for i:=0 to length(LastDisassembleData.Bytes)-1 do
   begin
-    if syntaxhighlighting and LastDisassembleData.iscloaked then
+    if syntaxhighlighting then
     begin
-      //check if this byte is cloaked (due to pageboundaries)
-      cloaked:=hasCloakedRegionInRange(LastDisassembleData.address+i, 1, VA, PA);
-      if (cloaked) then result:=result+'{C00FF00}'; //green
+      if LastDisassembleData.iscloaked then
+      begin
+        //check if this byte is cloaked (due to pageboundaries)
+        {$ifdef windows}
+        cloaked:=hasCloakedRegionInRange(LastDisassembleData.address+i, 1, VA, PA);
+        if (cloaked) then result:=result+'{C00FF00}'; //green
+        {$endif}
+      end;
+
+      changed:=hasAddressBeenChanged(LastDisassembleData.address+i);
+      if (changed) then result:=result+'{C0000FF}'; //red
     end;
 
     result:=result+inttohex(LastDisassembleData.Bytes[i],2);
@@ -15328,10 +15482,11 @@ begin
         if (LastDisassembleData.Seperators[j]=i+1) then  //followed by a seperator
           result:=result+' ';
 
-    if syntaxhighlighting and LastDisassembleData.iscloaked and cloaked then
+    if syntaxhighlighting and ((LastDisassembleData.iscloaked and cloaked) or changed ) then
     begin
       result:=result+'{N}'; //back to default
       cloaked:=false;
+      changed:=false;
     end;
   end;
 end;
@@ -15367,9 +15522,13 @@ var
   found: boolean;
   i: ptrUint;
 
+  aggressive: boolean;
 begin
   if d=nil then
     d:=defaultDisassembler;
+
+  aggressive:=d.aggressivealignment;
+  d.aggressivealignment:=true;
 
   x:=previousOpcodeHelp(d, address,80, result);
   if x<>address then
@@ -15405,6 +15564,8 @@ begin
       end;
     end;
   end;
+
+  d.aggressivealignment:=aggressive;
 end;
 
 
@@ -15639,7 +15800,7 @@ begin
       end;
 
 
-      s:=symhandler.getNameFromAddress(jumpAddress, symhandler.showsymbols, symhandler.showmodules,nil,nil,8,false);
+      s:=symhandler.getNameFromAddress(jumpAddress, symhandler.showsymbols, symhandler.showmodules, symhandler.showsections, nil,nil,8,false);
       if pos(s, LastDisassembleData.parameters)=0 then //no need to show a comment if it's exactly the same
         result:=result+'->'+s;
     end;
@@ -15926,13 +16087,13 @@ begin
 
                 if readprocessmemory(processhandle,pointer(value),@value,processhandler.Pointersize,actualread) then
                 begin
-                  ts:='->'+symhandler.getNameFromAddress(value,symhandler.showsymbols, symhandler.showmodules,nil,nil,8,false);
+                  ts:='->'+symhandler.getNameFromAddress(value,symhandler.showsymbols, symhandler.showmodules,symhandler.showsections, nil,nil,8,false);
                 end;
               end;
             end
             else
             begin
-              ts:=symhandler.getNameFromAddress(value,symhandler.showsymbols, symhandler.showmodules,nil,nil,8,false);
+              ts:=symhandler.getNameFromAddress(value,symhandler.showsymbols, symhandler.showmodules,symhandler.showsections,nil,nil,8,false);
             end;
 
 
@@ -16058,10 +16219,10 @@ var found: boolean;
     d: dword;
     i: integer;
 begin
-  if (showsymbols or showmodules) and (chars>=8) then
+  if (showsymbols or showmodules or showsections) and (chars>=8) then
   begin
     found:=false;
-    result:=symhandler.getNameFromAddress(value,showsymbols, showmodules, nil, @found,chars, false);
+    result:=symhandler.getNameFromAddress(value,showsymbols, showmodules, showsections, nil, @found,chars, false);
 
     //when found, and the symbol contains a space or comma, put the symbolname in quotes
 

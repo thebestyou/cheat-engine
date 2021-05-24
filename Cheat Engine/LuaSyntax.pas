@@ -458,6 +458,7 @@ var luasyntaxStringHashList: TStringHashList;
 implementation
 
 uses
+  betterControls,
 {$IFDEF SYN_CLX}
   QSynEditStrConst, math;
 {$ELSE}
@@ -645,6 +646,7 @@ begin
   Result := 0;
   while ToHash^ in ['.', '_', 'a'..'z', 'A'..'Z', '0'..'9'] do
   begin
+    if (ToHash^='.') and ((ToHash+1)^='.') then break;
     inc(Result, mHashTable[ToHash^]);
     inc(ToHash);
   end;
@@ -1876,7 +1878,10 @@ begin
 
   fKeyAttri := TSynHighLighterAttributes.Create(SYNS_AttrReservedWord);
   fKeyAttri.Style := [fsBold];
-  fKeyAttri.Foreground:=clBlue;
+  if ShouldAppsUseDarkMode() then
+    fKeyAttri.Foreground:=$ff7f00
+  else
+    fKeyAttri.Foreground:=clBlue;
   AddAttribute(fKeyAttri);
 
   fKeySecondaryAttri:= TSynHighLighterAttributes.Create(SYNS_AttrReservedWord2);
@@ -1897,7 +1902,11 @@ begin
   fInternalFunctionAttri := TSynHighLighterAttributes.Create(SYNS_AttrInternalFunction);
   fInternalFunctionAttri.Style := [fsBold];
   fInternalFunctionAttri.Foreground:=$c08000;
-  fInternalFunctionAttri.Background:=$eeeeee;
+  if ShouldAppsUseDarkMode=false then
+    fInternalFunctionAttri.Background:=$eeeeee
+  else
+    fInternalFunctionAttri.Background:=$333333;
+
   AddAttribute(fInternalFunctionAttri);
 
   fLuaMStringAttri := TSynHighLighterAttributes.Create(SYNS_AttrLuaMString);
@@ -2151,6 +2160,7 @@ begin
   reg:=tregistry.create;
   reg.RootKey:=Rootkey;
   result:=false;
+
   if reg.OpenKey(Key,false) then
   begin
     result:=true;

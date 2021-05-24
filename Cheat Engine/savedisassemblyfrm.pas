@@ -5,13 +5,15 @@ unit savedisassemblyfrm;
 interface
 
 uses
-  LCLIntf, LResources, Messages, SysUtils, Variants, Classes, Graphics,
+  LCLIntf, LResources, Messages, LMessages, SysUtils, Variants, Classes, Graphics,
   Controls, Forms, Dialogs, symbolhandler, symbolhandlerstructs, disassembler,
-  StdCtrls, ComCtrls, ActnList, Clipbrd, ExtCtrls, strutils, Parsers;
+  StdCtrls, ComCtrls, ActnList, Clipbrd, ExtCtrls, strutils, Parsers, betterControls;
 
 type
   TfrmSavedisassembly = class;
   TSaveDisassemblyThread=class(TThread)
+  private
+    procedure closeform;
   public
     progressbar: tprogressbar;
     startaddress: ptrUint;
@@ -23,6 +25,7 @@ type
     copymode: boolean;
     filename: string;
     form: TfrmSavedisassembly;
+
     procedure execute; override;
   end;
 
@@ -86,8 +89,9 @@ var oldaddress, currentaddress: ptrUint;
     addresslength: integer;
 begin
   disassembler:=TDisassembler.Create;
-  disassembler.showmodules:=memorybrowser.Showmoduleaddresses1.checked;
-  disassembler.showsymbols:=memorybrowser.Showsymbols1.Checked;
+  disassembler.showmodules:=memorybrowser.miShowModuleAddresses.checked;
+  disassembler.showsymbols:=memorybrowser.miShowSymbols.Checked;
+  disassembler.showsections:=memorybrowser.miShowSectionAddresses.checked;
 
   currentaddress:=startaddress;
 
@@ -194,8 +198,17 @@ begin
 
   disassembler.free;
 
+  {$ifdef windows}
   if not terminated then postmessage(form.handle,wm_close,0,0);
+  {$else}
+  queue(CloseForm);
+  {$endif}
 
+end;
+
+procedure TSaveDisassemblyThread.closeform;
+begin
+  form.close;
 end;
 
 procedure TfrmSavedisassembly.setCopyMode(mode: boolean);

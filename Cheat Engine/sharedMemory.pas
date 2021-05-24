@@ -5,7 +5,10 @@ unit sharedMemory;
 interface
 
 uses
-  windows, Classes, SysUtils, symbolhandler, autoassembler, frmautoinjectunit,
+  {$ifdef windows}
+  windows,
+  {$endif}
+  Classes, SysUtils, symbolhandler, autoassembler, frmautoinjectunit,
   cefuncproc, NewKernelHandler, Clipbrd, commonTypeDefs;
 
 const FILE_MAP_EXECUTE = $20;
@@ -21,7 +24,11 @@ uses ProcessHandlerUnit;
 
 function createSharedMemory(name: string; size: integer): THandle;
 begin
+  {$ifdef windows}
   result:=CreateFileMapping(INVALID_HANDLE_VALUE,nil,PAGE_EXECUTE_READWRITE,0,size,pchar(name));
+  {$else}
+  result:=-1;
+  {$endif}
 end;
 
 function allocateSharedMemory(name: string; size: integer=4096): pointer;
@@ -29,6 +36,7 @@ var
   access: dword;
   h: thandle;
 begin
+  {$ifdef windows}
   access:=FILE_MAP_EXECUTE or FILE_MAP_READ or FILE_MAP_WRITE;
 
 
@@ -39,12 +47,14 @@ begin
     h:=createSharedMemory(name, size);
 
   result:=MapViewOfFile(h,access,0,0,0);
+  {$else}
+  result:=nil;
+  {$endif}
 end;
 
 function allocateSharedMemoryIntoTargetProcess(name: string; size: integer=4096): pointer;
 var s: tstringlist;
-  CEAllocArray: TCEAllocArray;
-  ExceptionList: TCEExceptionListArray;
+  disableinfo: TDisableInfo;
   i: integer;
   starttime: qword;
   x: ptruint;
@@ -54,6 +64,7 @@ var s: tstringlist;
 
   h: THandle;
 begin
+  {$ifdef windows}
   access:=FILE_MAP_EXECUTE or FILE_MAP_READ or FILE_MAP_WRITE;
 
 
@@ -147,21 +158,22 @@ begin
 
  // Clipboard.AsText:=s.text;
 
+  disableinfo:=TDisableInfo.create;
   try
-    setlength(CEAllocArray,0);
-    if autoassemble(s,false, true, false, false, CEAllocArray, exceptionlist) then
+
+    if autoassemble(s,false, true, false, false, disableinfo) then
     begin
       starttime:=GetTickCount64;
-      for i:=0 to length(ceallocarray)-1 do
+      for i:=0 to length(disableinfo.allocs)-1 do
       begin
 
-        if ceallocarray[i].varname='address' then
+        if disableinfo.allocs[i].varname='address' then
         begin
           while gettickcount64-starttime<10*1000 do
           begin
             //poll if address is still 0
 
-            if ReadProcessMemory(processhandle, pointer(ceallocarray[i].address), @address, processhandler.pointersize, x) then
+            if ReadProcessMemory(processhandle, pointer(disableinfo.allocs[i].address), @address, processhandler.pointersize, x) then
             begin
               if address<>0 then
               begin
@@ -178,10 +190,15 @@ begin
         end;
       end;
 
-      VirtualFreeEx(processhandle, pointer(ceallocarray[0].address), 0, MEM_DECOMMIT);
+      VirtualFreeEx(processhandle, pointer(disableinfo.allocs[0].address), 0, MEM_DECOMMIT);
     end;
   except
   end;
+
+  disableinfo.free;
+  {$else}
+  result:=nil;
+  {$endif}
 end;
 
 end.

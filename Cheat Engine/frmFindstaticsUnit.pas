@@ -5,9 +5,15 @@ unit frmFindstaticsUnit;
 interface
 
 uses
-  jwawindows, windows, LCLIntf, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,
+  {$ifdef darwin}
+  macport,
+  {$endif}
+  {$ifdef windows}
+  jwawindows, windows,
+  {$endif}
+  LCLIntf, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,
   Dialogs, StdCtrls, ExtCtrls, ComCtrls,disassembler,CEFuncProc,NewKernelHandler,
-  {tlhelp32,}symbolhandler, LResources, commonTypeDefs;
+  {tlhelp32,}symbolhandler, LResources, commonTypeDefs, betterControls;
 
 type TStaticlist=record
   s: ptrUint;
@@ -165,6 +171,7 @@ begin
     d:=TDisassembler.Create;
     d.showmodules:=false;
     d.showsymbols:=false;
+    d.showsections:=false;
 
 
     while (not terminated) and (currentpos<=stopaddress) do

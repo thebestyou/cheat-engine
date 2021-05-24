@@ -28,7 +28,7 @@ typedef union _MTRRCAP
     unsigned WC       : 1; //Write combining support
     unsigned SMRR     : 1; //SMRR register support
   };
-} MTRRCAP, *PMTRRCAP;
+} MTRRCAP, *PMTRRCAP;  //e.g d0a: vcnt=10 FIX=1 WC=1 SMRR=1
 
 typedef union _MTRRDEF
 {
@@ -54,11 +54,17 @@ int has_EPT_INVEPTAllContext;
 
 int hasUnrestrictedSupport;
 int hasVPIDSupport;
+int canToggleCR3Exit;
 
 int has_VPID_INVVPIDIndividualAddress;
 int has_VPID_INVVPIDSingleContext;
 int has_VPID_INVVPIDAllContext;
 int has_VPID_INVVPIDSingleContextRetainingGlobals;
+
+//AMD
+int has_NP_1GBsupport;
+int has_NP_2MBsupport;
+
 
 
 int vmx_enableProcBasedFeature(DWORD PBF);
@@ -78,6 +84,9 @@ void vmx_removeMSRReadExit(DWORD msrValue);
 void vmx_setMSRWriteExit(DWORD msrValue);
 void vmx_removeMSRWriteExit(DWORD msrValue);
 
+void vmx_enableTSCHook(pcpuinfo currentcpuinfo);
+void vmx_disableTSCHook(pcpuinfo currentcpuinfo);
+
 
 void setupVMX(pcpuinfo currentcpuinfo);
 
@@ -85,5 +94,7 @@ void setup8086WaitForSIPI(pcpuinfo currentcpuinfo, int setupvmcontrols);
 
 QWORD realmode_inthook_calladdressPA;
 int realmode_inthook_calladdressJumpSize;
+
+extern int TSCHooked;
 
 #endif /* VMM_VMXSETUP_H_ */

@@ -15,8 +15,9 @@ Now if you didn't read this to bypass the cheat-e-coin system but just want to s
 
 interface
 
+{$IFDEF windows}
 uses
-  jwawindows, windows, newkernelhandler, Classes, SysUtils, dialogs;
+  jwawindows, windows, newkernelhandler, Classes, SysUtils, dialogs, betterControls;
 
 procedure EnableCheatEcoinSystem;
 
@@ -24,9 +25,11 @@ procedure decreaseCheatECoinCount; stdcall;
 function getCheatECoinCount: integer;
 
 function checkCoinStatus: integer;
+{$ENDIF}
 
 implementation
 
+{$IFDEF windows}
 uses forms, frmMicrotransactionsUnit, ceregistry, luahandler;
 
 var
@@ -323,7 +326,7 @@ procedure decreaseCheatECoinCount; stdcall;
 begin
   asm
     {$ifdef cpu64}
-    lea r8,[_DecreaseCount]
+    lea r8,[rip+_DecreaseCount]
     xor dword [r8],$deadbeef
     {$else}
     add [_DecreaseCount],2
@@ -336,7 +339,7 @@ end;
 function getCheatECoinCount: integer; assembler; nostackframe;
 asm
   {$ifdef cpu64}
-  lea r8,[_GetCount]
+  lea r8,[rip+_GetCount]
   mov eax,[r8]
   {$else}
   lea eax,[_GetCount]
@@ -436,7 +439,7 @@ begin
 
   while used>0 do
   begin
-   // decreaseCheatECoinCount;
+    decreaseCheatECoinCount;
     dec(used);
   end;
 
@@ -449,6 +452,7 @@ end;
 
 finalization
   saveCoins;
+{$ENDIF}
 
 
 end.

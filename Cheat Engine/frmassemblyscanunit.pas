@@ -6,7 +6,7 @@ interface
 
 uses
   Classes, SysUtils, FileUtil, Forms, Controls, Graphics, Dialogs, StdCtrls,
-  ExtCtrls, CEFuncProc, Parsers, symbolhandler, ProcessHandlerUnit;
+  ExtCtrls, CEFuncProc, Parsers, symbolhandler, ProcessHandlerUnit, betterControls;
 
 type
 
@@ -35,6 +35,8 @@ type
 var frmAssemblyScan: TfrmAssemblyScan;
 
 implementation
+
+uses LCLType, LCLIntf;
 
 {$R *.lfm}
 
@@ -65,6 +67,8 @@ begin
 end;
 
 procedure TfrmAssemblyScan.FormShow(Sender: TObject);
+var DC: hDC;
+    rect: TRect;
 begin
   if processhandler.is64bit then
   begin
@@ -88,7 +92,11 @@ begin
   edtfrom.Constraints.MinWidth:=canvas.GetTextWidth('XXXXXXXXXXXXXXXX');
   edtTo.Constraints.MinWidth:=edtfrom.Constraints.MinWidth;
 
-  constraints.minwidth:=lblInputAssemblyCode.canvas.TextWidth(lblInputAssemblyCode.caption)+edtFrom.width+8;
+  DC := lblInputAssemblyCode.canvas.GetUpdatedHandle([csFontValid]);
+  rect:=TRect.Create(0, 0, 0, 0);
+  DrawText(DC, pchar(lblInputAssemblyCode.caption), Length(lblInputAssemblyCode.caption), rect, DT_CALCRECT);
+
+  constraints.minwidth:=rect.Width+edtFrom.width+8;
   constraints.MinHeight:=btnOk.top+btnok.Height;
 
 

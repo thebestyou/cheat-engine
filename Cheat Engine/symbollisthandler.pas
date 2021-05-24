@@ -10,12 +10,12 @@ interface
 
 {$ifdef windows}
 uses
-  windows, Classes, SysUtils, AvgLvlTree, math, fgl, cvconst, syncobjs, symbolhandlerstructs;
+  windows, Classes, SysUtils, AvgLvlTree, laz_avl_Tree, math, fgl, cvconst, syncobjs, symbolhandlerstructs;
 {$endif}
 
-{$ifdef unix}
+{$ifdef darwin}
 uses
-  unixporthelper, Classes, SysUtils, AvgLvlTree, math, fgl, cvconst, syncobjs;
+  macport, Classes, SysUtils, AvgLvlTree, math, fgl, cvconst, syncobjs, symbolhandlerstructs;
 {$endif}
 
 type
@@ -127,8 +127,11 @@ type
 
     fExtraSymbolDataList: TExtraSymbolDataList;
     fPID: dword;
+    fname: string;
+    frefcount: integer;
     function A2SCheck(Tree: TAvgLvlTree; Data1, Data2: pointer): integer;
     function S2ACheck(Tree: TAvgLvlTree; Data1, Data2: pointer): integer;
+    function getCount: integer;
   public
     constructor create;
     destructor destroy; override;
@@ -140,6 +143,7 @@ type
     function GetModuleByAddress(address: ptrUint; var mi: TModuleInfo):BOOLEAN;
     function getmodulebyname(modulename: string; var mi: TModuleInfo):BOOLEAN;
     procedure GetModuleList(var list: TExtraModuleInfoList);
+    procedure GetSymbolList(list: TStrings);
     function AddSymbol(module: string; searchkey: string; address: qword; size: integer; skipaddresstostringlookup: boolean=false; extraData: TExtraSymbolData=nil): PCESymbolInfo;
     function FindAddress(address: qword): PCESymbolInfo;
     function FindSymbol(s: string): PCESymbolInfo;
@@ -147,22 +151,21 @@ type
     procedure DeleteSymbol(searchkey: string); overload;
     procedure DeleteSymbol(address: qword); overload;
     procedure clear;
+    procedure unregisterList;
   published
     property ExtraSymbolDataList: TExtraSymbolDataList read fExtraSymbolDataList;
     property PID: dword read fPID write fPID;
-
+    property count: integer read getCount;
+    property name: string read fName write fName;
+    property refcount: integer read frefcount write frefcount;
   end;
 
 
 implementation
 
-{$ifdef windows}
-uses CEFuncProc, symbolhandler;
-{$endif}
 
-{$ifdef unix}
-uses symbolhandler;
-{$endif}
+uses CEFuncProc, symbolhandler;
+
 
 
 
@@ -191,6 +194,13 @@ begin
 end;
 
 //-------------
+
+function TSymbolListHandler.getCount: integer;
+begin
+  cs.Beginread;
+  result:=StringToAddress.Count;
+  cs.Endread;
+end;
 
 procedure TSymbolListHandler.AddModule(module:string; path: string; base: ptruint; size: dword; is64bit: boolean);
 var i: integer;
@@ -290,6 +300,22 @@ begin
     end;
   end;
   cs.Endread;
+end;
+
+procedure TSymbolListHandler.GetSymbolList(list: TStrings);
+var si: PCESymbolInfo;
+begin
+  list.clear;
+  cs.Beginread;
+  si:=FindFirstSymbolFromBase(0);
+
+  while si<>nil do
+  begin
+    list.AddObject(si^.originalstring, tobject(ptruint(si^.address)));
+    si:=si^.next;
+  end;
+
+  cs.endread;
 end;
 
 procedure TSymbolListHandler.GetModuleList(var list: TExtraModuleInfoList);
@@ -490,6 +516,11 @@ begin
 
       x.s:=d^.s;
 
+      d^.address:=0;
+      d^.next:=nil;
+      d^.previous:=nil;
+
+
       if d^.originalstring<>nil then
       begin
         StrDispose(d^.originalstring);
@@ -515,6 +546,10 @@ begin
       if z<>nil then
       begin
         d:=PCESymbolInfo(z.data);
+
+        d^.address:=0;
+        d^.next:=nil;
+        d^.previous:=nil;
 
         if d^.originalstring<>nil then
         begin
@@ -563,6 +598,10 @@ begin
 
       x.address:=d^.address;
 
+      d^.address:=0;
+      d^.next:=nil;
+      d^.previous:=nil;
+
       if d^.originalstring<>nil then
       begin
         StrDispose(d^.originalstring);
@@ -589,6 +628,10 @@ begin
       begin
         d:=PCESymbolInfo(z.data);
 
+        d^.address:=0;
+        d^.next:=nil;
+        d^.previous:=nil;
+
         if d^.originalstring<>nil then
         begin
           StrDispose(d^.originalstring);
@@ -607,7 +650,7 @@ begin
           d^.module:=nil;
         end;
 
-        StringToAddress.Delete(z);
+        AddressToString.Delete(z);
       end;
     end;
 
@@ -619,8 +662,12 @@ begin
 end;
 
 procedure TSymbolListHandler.clear;
-var x: TAvgLvlTreeNode;
+var
+  x: TAvgLvlTreeNode;
   d:PCESymbolInfo;
+  i: integer;
+
+  //e: TAVLTreeNodeEnumerator;
 begin
   cs.Beginwrite;
   try
@@ -641,14 +688,34 @@ begin
           strDispose(d^.module);
 
         FreeMemAndNil(d);
+        x.data:=nil;
         x:=StringToAddress.FindSuccessor(x);
       end;
+
+      {
+      x:=StringToAddress.Root;
+      while x<>nil do
+      begin
+        if x.data<>nil then
+        begin
+          OutputDebugString('Missed one');
+        end;
+
+        StringToAddress.Delete(x);
+        x:=stringtoaddress.root;
+      end;}
+
 
       StringToAddress.Clear;
     end;
 
     if AddressToString<>nil then
       AddressToString.Clear;
+
+    for i:=0 to ExtraSymbolDataList.count-1 do
+      TExtraSymbolData(ExtraSymbolDataList[i]).free;
+
+    ExtraSymbolDataList.clear;
 
   finally
     cs.endwrite;
@@ -665,6 +732,13 @@ begin
   fExtraSymbolDataList.Remove(d);
 end;
 
+procedure TSymbolListHandler.unregisterList;
+begin
+  if selfsymhandler<>nil then selfsymhandler.RemoveSymbolList(self);
+  if symhandler<>nil then symhandler.RemoveSymbolList(self);
+end;
+
+
 constructor TSymbolListHandler.create;
 begin
   inherited create;
@@ -679,15 +753,17 @@ begin
 
   log('TSymbolListHandler.create exit');
 
-
+  frefcount:=1;
+  fname:='unnamed';
 end;
 
 destructor TSymbolListHandler.destroy;
 var i: integer;
 begin
+  unregisterList;
 
-  if symhandler<>nil then
-    symhandler.RemoveSymbolList(self);
+
+
 
 
   clear;

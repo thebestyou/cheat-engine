@@ -5,11 +5,18 @@ unit frmLuaEngineUnit;
 interface
 
 uses
-  windows, Classes, SysUtils, FileUtil, LResources, Forms, Controls, Graphics,
+  {$ifdef darwin}
+  macport, LCLIntf, LCLProc, Unix, registry, xmlreg,
+  {$endif}
+  {$ifdef windows}
+  windows,
+  {$endif}
+  Classes, SysUtils, FileUtil, LResources, Forms, Controls, Graphics,
   Dialogs, StdCtrls, Menus, ExtCtrls, SynMemo, SynCompletion, SynEdit, lua,
-  lauxlib, lualib, LuaSyntax, luahandler, cefuncproc, sqldb, strutils,
+  lauxlib, lualib, LuaSyntax, luahandler, CEFuncProc, sqldb, strutils,
   InterfaceBase, ComCtrls, SynGutterBase, SynEditMarks, PopupNotifier, ActnList,
-  SynEditHighlighter, AvgLvlTree, math, LazFileUtils, Types, LCLType, pluginexports;
+  SynEditHighlighter, AvgLvlTree, math, LazFileUtils, Types, LCLType,
+  pluginexports, SynEditKeyCmds, betterControls;
 
 type
 
@@ -20,9 +27,9 @@ type
     FindDialog1: TFindDialog;
     GroupBox1: TGroupBox;
     leImageList: TImageList;
-    MenuItem12: TMenuItem;
-    MenuItem13: TMenuItem;
-    MenuItem14: TMenuItem;
+    miDebug: TMenuItem;
+    miFind: TMenuItem;
+    miRedo: TMenuItem;
     MenuItem15: TMenuItem;
     N1: TMenuItem;
     miAutoComplete: TMenuItem;
@@ -39,16 +46,16 @@ type
     ilLuaDebug: TImageList;
     ilSyneditDebug: TImageList;
     MainMenu1: TMainMenu;
-    MenuItem10: TMenuItem;
+    miUndo: TMenuItem;
     MenuItem11: TMenuItem;
     MenuItem4: TMenuItem;
     MenuItem5: TMenuItem;
-    MenuItem6: TMenuItem;
+    miFindReplace: TMenuItem;
     miView: TMenuItem;
     cbShowOnPrint: TMenuItem;
-    MenuItem7: TMenuItem;
-    MenuItem8: TMenuItem;
-    MenuItem9: TMenuItem;
+    miCut: TMenuItem;
+    miCopy: TMenuItem;
+    miPaste: TMenuItem;
     mOutput: TMemo;
     MenuItem1: TMenuItem;
     MenuItem2: TMenuItem;
@@ -66,25 +73,24 @@ type
     tbRun: TToolButton;
     tbSingleStep: TToolButton;
     procedure btnExecuteClick(Sender: TObject);
-    procedure Button1Click(Sender: TObject);
     procedure cbShowOnPrintClick(Sender: TObject);
     procedure dlgReplaceFind(Sender: TObject);
     procedure dlgReplaceReplace(Sender: TObject);
     procedure FormCreate(Sender: TObject);
     procedure FormDestroy(Sender: TObject);
     procedure FormShow(Sender: TObject);
-    procedure MenuItem10Click(Sender: TObject);
+    procedure miUndoClick(Sender: TObject);
     procedure MenuItem11Click(Sender: TObject);
-    procedure MenuItem13Click(Sender: TObject);
-    procedure MenuItem14Click(Sender: TObject);
+    procedure miFindClick(Sender: TObject);
+    procedure miRedoClick(Sender: TObject);
     procedure MenuItem15Click(Sender: TObject);
     procedure MenuItem2Click(Sender: TObject);
     procedure MenuItem3Click(Sender: TObject);
     procedure MenuItem5Click(Sender: TObject);
-    procedure MenuItem6Click(Sender: TObject);
-    procedure MenuItem7Click(Sender: TObject);
-    procedure MenuItem8Click(Sender: TObject);
-    procedure MenuItem9Click(Sender: TObject);
+    procedure miFindReplaceClick(Sender: TObject);
+    procedure miCutClick(Sender: TObject);
+    procedure miCopyClick(Sender: TObject);
+    procedure miPasteClick(Sender: TObject);
     procedure miResizeOutputClick(Sender: TObject);
     procedure miSaveCurrentScriptAsClick(Sender: TObject);
     procedure miSetBreakpointClick(Sender: TObject);
@@ -117,6 +123,8 @@ type
     procedure tShowHintTimer(Sender: TObject);
   private
     { private declarations }
+    CompleterInvokedByDot: boolean;
+    loadedFormPosition: boolean;
     hintwindow:THintWindow;
     continuemethod: integer;
     AutoCompleteStartLine: string;
@@ -138,7 +146,7 @@ implementation
 
 { TfrmLuaEngine }
 
-uses luaclass, SynEditTypes, globals, DPIHelper, frmSyntaxHighlighterEditor,
+uses LuaClass, SynPluginMultiCaret, SynEditTypes, globals, DPIHelper, frmSyntaxHighlighterEditor,
   frmautoinjectunit;
 
 resourcestring
@@ -200,6 +208,7 @@ begin
   if keychar='.' then
   begin
     value:=value+'.';
+
 //    TThread.Queue(nil, ContinueAutoComplete);
     t:=TTimer.Create(self);
     t.interval:=1;
@@ -253,15 +262,14 @@ begin
     exit('_G');
   end;
 
-  extra:=copy(r,i+1,length(r)-i-1);
+  extra:=copy(r,i+1);
   exit(copy(r,1,i-1));
-
 
 end;
 
 procedure TfrmLuaEngine.scLuaCompleterExecute(Sender: TObject);
 var
-  s,extra: string;
+  s,s2,extra: string;
   w: tpoint;
   i,j,si: integer;
   start: integer;
@@ -280,6 +288,7 @@ var
 
   f: boolean;
 begin
+
   scLuaCompleter.ItemList.Clear;
 
   L:=luavm;
@@ -287,9 +296,19 @@ begin
 
   //parse the symbol the cursor is at
   s:=mscript.LineText;
-  s:=copy(s,1,mscript.CaretX-1);
+  if CompleterInvokedByDot then
+  begin
+    Insert('.',s,mscript.CaretX);
+    s:=copy(s,1,mscript.CaretX);
+  end
+  else
+    s:=copy(s,1,mscript.CaretX-1);
+
+  CompleterInvokedByDot:=false;
+
 
   s:=ParseStringForPath(s,extra);
+
 
   try
     if luaL_loadstring(L,pchar('return '+s))=0 then
@@ -383,11 +402,25 @@ begin
                 if lua_type(L,-2)=LUA_TSTRING then
                 begin
                   s:=Lua_ToString(L,-2);
-                  if s='math' then
-                  asm
-                  nop
+
+                  if lua_isfunction(L,-1) then
+                  begin
+                    if lua_iscfunction(L,-1) then  //should be the case, but some people don't use the designated functions
+                    begin
+                      s2:=s;
+                      s2[1]:=lowercase(s2[1]);
+                      if s2[1]<>s[1] then
+                      begin
+                        //check if it does have a duplicate
+                        lua_pushstring(L,s2);
+                        lua_gettable(L,i);
+                        if lua_isnil(L,-1)=false then //has duplicate
+                          s[1]:=lowercase(s[1]);
+
+                        lua_pop(L,1);
+                      end;
+                    end;
                   end;
-                  if lua_isfunction(L,-1) then s[1]:=lowercase(s[1]);
 
                   properties.Add(s);
                 end;
@@ -415,6 +448,8 @@ begin
         lua_pop(L,i);
       end;
     end;
+
+    scLuaCompleter.CurrentString:=extra;
   except
     on e:exception do
       messagedlg(e.message,mtError,[mbok],0);
@@ -439,8 +474,10 @@ var
 begin
   //get the text from the end till the first .
 
-  s:=scLuaCompleter.CurrentString;
+  s:=uppercase(scLuaCompleter.CurrentString);
 
+  if scLuaCompleter.ItemList.count=0 then
+    exit;
 
 
   if s='' then exit;
@@ -452,6 +489,7 @@ begin
 
   //outputdebugstring(pchar(s));
 
+
   for i:=0 to scLuaCompleter.ItemList.count-1 do
   begin
     s2:=uppercase(scLuaCompleter.ItemList[i]);
@@ -459,14 +497,14 @@ begin
     p:=pos(s,s2);
     if p=1 then
     begin
+      scLuaCompleter.Position:=i-1;
+
       APosition:=i;
       exit;
     end;
   end;
 
-  APosition:=-1;
- // APosition:=scLuaCompleter.ItemList.IndexOf(s);
-
+  aposition:=-1;
 end;
 
 procedure TfrmLuaEngine.SQLConnector1AfterConnect(Sender: TObject);
@@ -564,6 +602,13 @@ begin
     begin
       if (name=token) then
       begin
+        if lua_isnil(Luavm,-1) then
+        begin
+          lua_pop(LuaVM,1);
+          inc(i);
+          continue;
+        end;
+
         result:=true;
         break;   //leave the value on the stack
       end
@@ -856,10 +901,6 @@ begin
         exit;
       end;
 
-
-
-
-
       if hintwindow=nil then
         hintwindow:=THintWindow.Create(self);
 
@@ -1029,7 +1070,14 @@ begin
       end;
 
       if application.Terminated then
+      begin
+        {$ifdef windows}
         ExitProcess(UINT(-1)); //there's nothing to return to...
+        {$endif}
+        {$ifdef darwin}
+        KillThread(GetCurrentThreadId);
+        {$endif}
+      end;
 
       LuaDebugForm.mScript.ReadOnly:=false;
 
@@ -1265,11 +1313,7 @@ begin
   mScript.SetFocus;
 end;
 
-procedure TfrmLuaEngine.Button1Click(Sender: TObject);
-begin
 
-
-end;
 
 procedure TfrmLuaEngine.cbShowOnPrintClick(Sender: TObject);
 begin
@@ -1343,12 +1387,29 @@ procedure TfrmLuaEngine.FormCreate(Sender: TObject);
 var
   x: array of integer;
   fq: TFontQuality;
+  i: integer;
+  multicaret: TSynPluginMultiCaret;
 begin
 
   synhighlighter:=TSynLuaSyn.Create(self);
   reloadHighlighterSettings;
 
   mscript.Highlighter:=synhighlighter;
+
+  multicaret:=TSynPluginMultiCaret.Create(mscript);
+  multicaret.EnableWithColumnSelection:=true;
+  multicaret.DefaultMode:=mcmMoveAllCarets;
+  multicaret.DefaultColumnSelectMode:=mcmCancelOnCaretMove;
+
+  //set the default colors
+  mscript.Color:=colorset.TextBackground;
+  mscript.Font.color:=colorset.FontColor;
+  mscript.Gutter.Color:=clBtnFace;
+  mscript.Gutter.LineNumberPart.MarkupInfo.Background:=clBtnFace;
+  mscript.Gutter.SeparatorPart.MarkupInfo.Background:=clBtnFace;
+
+  mscript.LineHighlightColor.Background:=ColorToRGB(mscript.Color) xor $212121;
+
 
   fq:=mscript.Font.Quality;
   if not (fq in [fqCleartypeNatural, fqDefault]) then
@@ -1358,6 +1419,7 @@ begin
   setlength(x,1);
   if LoadFormPosition(self, x) then
   begin
+    loadedFormPosition:=true;
     panel1.height:=x[0];
     if length(x)>1 then
     begin
@@ -1371,6 +1433,27 @@ begin
         miAutoComplete.checked:=x[3]=1;
     end;
   end;
+
+  {$ifdef darwin}
+  miCut.ShortCut:=TextToShortCut('Meta+X');
+  miCopy.ShortCut:=TextToShortCut('Meta+C');
+  miPaste.ShortCut:=TextToShortCut('Meta+V');
+  miUndo.ShortCut:=TextToShortCut('Meta+Z');
+  miRedo.ShortCut:=TextToShortCut('Shift+Meta+X');
+  miFind.ShortCut:=TextToShortCut('Meta+F');
+
+  i:=mScript.Keystrokes.FindCommand(ecSelectAll);
+  if i<>-1 then mScript.Keystrokes[i].ShortCut:=TextToShortCut('Meta+A');
+
+
+  MenuItem3.ShortCutKey2:=TextToShortCut('Meta+S');
+
+  MenuItem11.ShortCut:=TextToShortCut('Meta+N');
+  MenuItem2.ShortCut:=TextToShortCut('Meta+O');
+  MenuItem3.ShortCut:=TextToShortCut('Meta+S');
+  miSaveCurrentScriptAs.ShortCut:=TextToShortCut('Meta+Alt+S');
+
+   {$endif}
 end;
 
 procedure TfrmLuaEngine.FormDestroy(Sender: TObject);
@@ -1386,7 +1469,7 @@ begin
 end;
 
 procedure TfrmLuaEngine.FormShow(Sender: TObject);
-var i: integer;
+var i, off: integer;
 begin
   if overridefont<>nil then
     mScript.font.size:=overridefont.size
@@ -1404,10 +1487,26 @@ begin
     adjustedSize:=true;
   end;
 
+  if loadedFormPosition=false then
+  begin
+    i:=mscript.CharWidth*40+mscript.Gutter.Width+panel3.width;
+    if mscript.width<i then clientwidth:=clientwidth+(i-mscript.width);
+
+    i:=mscript.LineHeight*6;
+    off:=(i-mscript.height);
+    if mscript.height<i then panel1.height:=panel1.height+off;
+
+    clientheight:=clientheight+off;
+
+    i:=canvas.TextHeight('XXX')*10;
+    if moutput.height<i then
+      clientheight:=clientheight+(i-moutput.height);
+  end;
+
 end;
 
 
-procedure TfrmLuaEngine.MenuItem10Click(Sender: TObject);
+procedure TfrmLuaEngine.miUndoClick(Sender: TObject);
 begin
   mscript.Undo;
 end;
@@ -1421,19 +1520,19 @@ begin
   f.show;
 end;
 
-procedure TfrmLuaEngine.MenuItem13Click(Sender: TObject);
+procedure TfrmLuaEngine.miFindClick(Sender: TObject);
 begin
   finddialog1.Execute;
 end;
 
-procedure TfrmLuaEngine.MenuItem14Click(Sender: TObject);
+procedure TfrmLuaEngine.miRedoClick(Sender: TObject);
 begin
   mscript.redo;
 end;
 
 procedure TfrmLuaEngine.reloadHighlighterSettings;
 begin
-  synhighlighter.LoadFromRegistry(HKEY_CURRENT_USER, '\Software\Cheat Engine\Lua Highlighter');
+  synhighlighter.LoadFromRegistry(HKEY_CURRENT_USER, '\Software\Cheat Engine\Lua Highlighter'+darkmodestring);
 end;
 
 procedure TfrmLuaEngine.MenuItem15Click(Sender: TObject);
@@ -1441,11 +1540,11 @@ var
   frmHighlighterEditor: TfrmHighlighterEditor;
 begin
   frmHighlighterEditor:=TfrmHighlighterEditor.create(self);
-  synhighlighter.LoadFromRegistry(HKEY_CURRENT_USER, '\Software\Cheat Engine\Lua Highlighter');
+  synhighlighter.LoadFromRegistry(HKEY_CURRENT_USER, '\Software\Cheat Engine\Lua Highlighter'+darkmodestring);
   frmHighlighterEditor.highlighter:=synhighlighter;
   if frmHighlighterEditor.showmodal=mrok then
   begin
-    synhighlighter.SaveToRegistry(HKEY_CURRENT_USER, '\Software\Cheat Engine\Lua Highlighter');
+    synhighlighter.SaveToRegistry(HKEY_CURRENT_USER, '\Software\Cheat Engine\Lua Highlighter'+darkmodestring);
     ReloadAllAutoInjectHighlighters; //AA uses lua too
     ReloadAllLuaEngineHighlighters;
   end;
@@ -1456,7 +1555,7 @@ end;
 procedure TfrmLuaEngine.MenuItem2Click(Sender: TObject);
 begin
   if OpenDialog1.Execute then
-    mscript.Lines.LoadFromFile(opendialog1.filename, true);
+    mscript.Lines.LoadFromFile(opendialog1.filename{$if FPC_FULLVERSION>=030200}, true{$endif});
 
 end;
 
@@ -1473,22 +1572,22 @@ begin
   moutput.Clear;
 end;
 
-procedure TfrmLuaEngine.MenuItem6Click(Sender: TObject);
+procedure TfrmLuaEngine.miFindReplaceClick(Sender: TObject);
 begin
   dlgReplace.Execute;
 end;
 
-procedure TfrmLuaEngine.MenuItem7Click(Sender: TObject);
+procedure TfrmLuaEngine.miCutClick(Sender: TObject);
 begin
   mscript.CutToClipboard;
 end;
 
-procedure TfrmLuaEngine.MenuItem8Click(Sender: TObject);
+procedure TfrmLuaEngine.miCopyClick(Sender: TObject);
 begin
   mscript.CopyToClipboard;
 end;
 
-procedure TfrmLuaEngine.MenuItem9Click(Sender: TObject);
+procedure TfrmLuaEngine.miPasteClick(Sender: TObject);
 begin
   mscript.PasteFromClipboard;
 end;
@@ -1523,7 +1622,7 @@ begin
   if savedialog1.Execute then
   begin
     mscript.lines.SaveToFile(savedialog1.filename);
-    frmLuaEngine.Caption:=rsLuaEngine+' '+ExtractFileNameOnly(savedialog1.filename);
+    Caption:=rsLuaEngine+' '+ExtractFileNameOnly(savedialog1.filename);
   end;
 end;
 
@@ -1626,13 +1725,30 @@ begin
   begin
     if key='.' then
     begin
+      {$ifdef windows} //perhaps fixed in laz 2.0.6 which I use for mac , or just a cocoa thing where the char is inserted first
+      //mscript.InsertTextAtCaret('.');
 
-      mscript.InsertTextAtCaret('.');
+
+
+
+
+
+      {$endif}
       p:=mscript.RowColumnToPixels(point(mscript.CaretX,mscript.CaretY+1));
       p2:=mscript.ClientToScreen(point(0,0));
+
+
+
+      scLuaCompleter.Editor:=mscript;
+
+
+      CompleterInvokedByDot:=true;
+
       scLuaCompleter.Execute('.',p2+p);
 
-      key:=#0;
+      if (scLuaCompleter.TheForm<>nil) and scLuaCompleter.TheForm.CanFocus then
+        scLuaCompleter.TheForm.SetFocus;
+
     end;
   end;
 end;
@@ -1664,7 +1780,10 @@ end;
 
 procedure TfrmLuaEngine.mScriptShowHint(Sender: TObject; HintInfo: PHintInfo);
 begin
+  asm
+  nop
 
+  end;
 end;
 
 

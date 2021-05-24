@@ -5,6 +5,7 @@ object frameHotkeyConfig: TframeHotkeyConfig
   Width = 488
   ClientHeight = 414
   ClientWidth = 488
+  LCLVersion = '2.0.6.0'
   TabOrder = 0
   DesignLeft = 514
   DesignTop = 194
@@ -68,10 +69,13 @@ object frameHotkeyConfig: TframeHotkeyConfig
         'Cancel the current scan'
         'Debug->Run'
       )
-      ItemHeight = 15
+      ItemHeight = 0
       OnClick = ListBox1Click
+      OnDrawItem = ListBox1DrawItem
       OnSelectionChange = ListBox1SelectionChange
+      Options = []
       PopupMenu = PopupMenu1
+      Style = lbOwnerDrawFixed
       TabOrder = 0
     end
   end
@@ -301,8 +305,8 @@ object frameHotkeyConfig: TframeHotkeyConfig
   end
   object PopupMenu1: TPopupMenu
     Images = fhcImageList
-    left = 69
-    top = 131
+    Left = 69
+    Top = 131
     object MenuItem1: TMenuItem
       Caption = 'Clear list'
       ImageIndex = 0
@@ -310,8 +314,8 @@ object frameHotkeyConfig: TframeHotkeyConfig
     end
   end
   object fhcImageList: TImageList
-    left = 320
-    top = 100
+    Left = 320
+    Top = 100
     Bitmap = {
       4C69010000001000000010000000FFFFFF00FFFFFF00FFFFFF00FFFFFF00CDCD
       F3327777DD994444D1DB3333CCFB3333CCFB4444D1DB7777DD99CDCDF332FFFF

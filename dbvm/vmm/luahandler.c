@@ -13,6 +13,7 @@
 #include "lua/src/lauxlib.h"
 #include "lua/src/lualib.h"
 #include "vmcall.h"
+#include "main.h"
 
 lua_State *LuaVM;
 
@@ -24,6 +25,54 @@ int lua_print(lua_State *L)
   {
     sendstring((char *)lua_tostring(L,i));
     sendstring("\n");
+  }
+
+  return 0;
+}
+
+int lua_cpuid(lua_State *L)
+{
+  unsigned long long rax,rbx,rcx,rdx;
+
+  if (lua_gettop(L)>=1)
+  {
+    rax=lua_tointeger(L,1);
+
+    if (lua_gettop(L)>=2)
+    {
+      rcx=lua_tointeger(L,2);
+    }
+  }
+
+  _cpuid(&rax,&rbx,&rcx,&rdx);
+
+  lua_pushinteger(L,rax);
+  lua_pushinteger(L,rbx);
+  lua_pushinteger(L,rcx);
+  lua_pushinteger(L,rdx);
+
+  return 4;
+}
+
+int lua_readMSR(lua_State *L)
+{
+  if (lua_gettop(L)>=1)
+  {
+    int msr=lua_tointeger(L,1);
+    lua_pushinteger(L, readMSR(msr));
+    return 1;
+  }
+
+  return 0;
+}
+
+int lua_writeMSR(lua_State *L)
+{
+  if (lua_gettop(L)>=2)
+  {
+    int msr=lua_tointeger(L,1);
+    QWORD value=lua_tointeger(L,2);
+    writeMSRSafe(msr, value);
   }
 
   return 0;
@@ -168,6 +217,13 @@ lua_State *initializeLua(void)
 
        lua_register(LuaVM,"readBytes", lua_readBytes);
        lua_register(LuaVM,"writeBytes", lua_writeBytes);
+
+       lua_register(LuaVM,"readMSR", lua_readMSR);
+       lua_register(LuaVM,"writeMSR", lua_writeMSR);
+
+       lua_register(LuaVM,"cpuid", lua_cpuid);
+
+
 
        lua_register(LuaVM,"psod", lua_psod);
     }

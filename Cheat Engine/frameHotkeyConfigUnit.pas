@@ -5,9 +5,14 @@ unit frameHotkeyConfigUnit;
 interface
 
 uses
-  windows, LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
+  {$ifdef darwin}
+  macport,
+  {$endif}
+  {$ifdef windows}
+  windows,
+  {$endif}LCLIntf, Messages, SysUtils, Classes, Graphics, Controls, Forms,
   Dialogs, StdCtrls, ExtCtrls, LResources, Menus, Buttons, CEFuncProc,
-  commonTypeDefs;
+  commonTypeDefs, LCLType, betterControls;
 
 const cehotkeycount=32;
 
@@ -46,6 +51,8 @@ type
     procedure Edit1KeyDown(Sender: TObject; var Key: Word;
       Shift: TShiftState);
     procedure Button3Click(Sender: TObject);
+    procedure ListBox1DrawItem(Control: TWinControl; Index: Integer;
+      ARect: TRect; State: TOwnerDrawState);
     procedure ListBox1SelectionChange(Sender: TObject; User: boolean);
     procedure MenuItem1Click(Sender: TObject);
   private
@@ -203,6 +210,7 @@ procedure TframeHotkeyConfig.Edit1MouseDown(Sender: TObject;
 var key: word;
 begin
   key:=0;
+  {$ifdef windows}
   case button of
     mbMiddle: key:=VK_MBUTTON;
     mbExtra1: key:=VK_XBUTTON1;
@@ -211,7 +219,23 @@ begin
 
   if key<>0 then
     Edit1KeyDown(edit1, key, shift);
+  {$endif}
 end;
+
+{$ifdef darwin}
+
+function isModifier(k: word): boolean;
+begin
+  result:=false;
+  case k of
+    vk_lwin, vk_rwin, vk_shift,vk_lshift,
+    vk_rshift, VK_CAPITAL, VK_MENU, vk_LMENU,
+    vk_RMENU, VK_CONTROL, VK_LCONTROL, VK_RCONTROL:
+      result:=true;
+
+  end;
+end;
+{$endif}
 
 procedure TframeHotkeyConfig.Edit1KeyDown(Sender: TObject; var Key: Word;
   Shift: TShiftState);
@@ -222,12 +246,21 @@ begin
     if newhotkeys[listbox1.ItemIndex][4]=0 then
     begin
       for i:=0 to 4 do
+      begin
+        {$ifdef darwin}
+        if (newhotkeys[listbox1.ItemIndex][i]<>0) and (not ismodifier(key)) and (not ismodifier(newhotkeys[listbox1.ItemIndex][i])) then break;  //only one
+        {$endif}
+
         if newhotkeys[listbox1.ItemIndex][i]=0 then
         begin
           newhotkeys[listbox1.ItemIndex][i]:=key;
           break;
-        end else
-        if newhotkeys[listbox1.ItemIndex][i]=key then break;
+        end
+        else
+        if newhotkeys[listbox1.ItemIndex][i]=key then
+          break;
+
+      end;
     end;
 
     edit1.Text:=ConvertKeyComboToString(newhotkeys[listbox1.ItemIndex]);
@@ -242,6 +275,48 @@ begin
     edit1.Text:=ConvertKeyComboToString(newhotkeys[listbox1.ItemIndex]);
     edit1.SetFocus;
   end;
+end;
+
+procedure TframeHotkeyConfig.ListBox1DrawItem(Control: TWinControl;
+  Index: Integer; ARect: TRect; State: TOwnerDrawState);
+const
+  TO_START_ALIGNMENT: array[Boolean] of TAlignment = (taLeftJustify, taRightJustify);
+var
+  OldTextStyle, NewTextStyle: TTextStyle;
+  Canvas: TCanvas;
+  Hotkey: string;
+begin
+  Canvas := TListBox(Control).Canvas;
+  if not(odBackgroundPainted in State) then
+    Canvas.FillRect(ARect);
+
+  ARect.Left += 2;
+  ARect.Right -= 2;
+
+  Canvas.font.color:=clWindowtext;
+
+  OldTextStyle := Canvas.TextStyle;
+  NewTextStyle.Layout:= tlCenter;
+
+  Hotkey := ConvertKeyComboToString(newhotkeys[Index]);
+  if(Hotkey <> '') then
+  begin
+    Hotkey := '(' + Hotkey + ')';
+
+    NewTextStyle.Alignment := TO_START_ALIGNMENT[not Control.UseRightToLeftAlignment];
+    Canvas.TextStyle := NewTextStyle;
+    Canvas.TextRect(ARect, ARect.Left, ARect.Top, Hotkey);
+    if Control.UseRightToLeftAlignment then
+      ARect.Left += Canvas.TextWidth(Hotkey) + 2
+    else
+      ARect.Right -= Canvas.TextWidth(Hotkey) + 2;
+  end;
+
+  NewTextStyle.Alignment:= TO_START_ALIGNMENT[Control.UseRightToLeftAlignment];
+  Canvas.TextStyle := NewTextStyle;
+  Canvas.TextRect(ARect, ARect.Left, ARect.Top, TListBox(Control).Items[Index]);
+
+  Canvas.TextStyle := OldTextStyle;
 end;
 
 procedure TframeHotkeyConfig.ListBox1SelectionChange(Sender: TObject;

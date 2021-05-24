@@ -117,6 +117,23 @@ typedef union _EPT_VIOLATION_INFO
   };
 } __attribute__((__packed__)) EPT_VIOLATION_INFO, *PEPT_VIOLATION_INFO;
 
+typedef union _NP_VIOLATION_INFO
+{
+  QWORD ErrorCode;
+  struct{
+    unsigned P        :  1; // 0: 0 if not present
+    unsigned W        :  1; // 1: 1 if it was a write access
+    unsigned US       :  1; // 2: 1 if it was a usermode execution
+    unsigned RSRVD    :  1; // 3: 1 if a reserved bit was set
+    unsigned ID       :  1; // 4: 1 if it was a code fetch
+    unsigned reserved1: 27;
+    unsigned gfa      :  1; // 32:guest final addr ess
+    unsigned gpt      :  1; // 33:guest page table
+  };
+} __attribute__((__packed__)) NP_VIOLATION_INFO, *PNP_VIOLATION_INFO;
+
+
+
 //pagewatch:
 
 typedef struct _fxsave64
@@ -200,6 +217,7 @@ typedef struct _pageevent_basic
   QWORD CR3; //in case of kernel or other process
   QWORD FSBASE;
   QWORD GSBASE;
+  QWORD GSBASE_KERNEL;
   QWORD FLAGS;
   QWORD RAX;
   QWORD RBX;
@@ -218,13 +236,19 @@ typedef struct _pageevent_basic
   QWORD RBP;
   QWORD RSP;
   QWORD RIP;
+  QWORD DR0;
+  QWORD DR1;
+  QWORD DR2;
+  QWORD DR3;
+  QWORD DR6;
+  QWORD DR7;
   WORD CS;
   WORD DS;
   WORD ES;
   WORD SS;
   WORD FS;
   WORD GS;
-  DWORD Count; //number of times this block has been seen
+  DWORD Count; //number of times this block has been seen, or heartbeat when used for internal dbvm bp
 } PageEventBasic, *PPageEventBasic;
 
 typedef struct _pageevent_extended
@@ -268,40 +292,35 @@ typedef struct _pageeventlistdescriptor
 
 } PageEventListDescriptor, *PPageEventListDescriptor;
 
-
-
-
 typedef struct
 {
   QWORD PhysicalAddress;
   int Size;
   int Type; //0=write, 1=access,2=execute
   DWORD Options;
+  QWORD LoopUserMode;
+  QWORD LoopKernelMode;
   int Active;
   int CopyInProgress; //if 1 events will be ignored
   PPageEventListDescriptor Log;
 } EPTWatchEntry, *PEPTWatchEntry;
 
-/* obsolete
 typedef struct
 {
   QWORD PhysicalAddressExecutable; //the PA of the original page and used for execute
   QWORD PhysicalAddressData; //the PA of the page shown when read/write operations happen
   void *Data;
   void *Executable;
-  //int *MegaJmpMap; //when the PhysicalAddressExecutable gets changed, it will keep track of code changes, including megajmp's
-  //int MegaJmpCount;
+  QWORD CloakMode;
+  union
+  {
+    PEPT_PTE eptentry[0]; //for every cpu hold the ept entry (PTE_PAE entry on AMD)
+    PPTE_PAE npentry[0];
+  };
 
-} CloakedPageInfo, *PCloakedPageInfo;
-*/
-
-typedef struct
-{
-  QWORD PhysicalAddressExecutable; //the PA of the original page and used for execute
-  QWORD PhysicalAddressData; //the PA of the page shown when read/write operations happen
-  void *Data;
-  void *Executable;
-  PEPT_PTE eptentry[0]; //for every cpu hold the ept entry
+  //debug info
+  BYTE InvokingCPU;
+  BYTE LastWritingCPU;
 } CloakedPageData, *PCloakedPageData;
 
 
@@ -313,6 +332,45 @@ typedef struct
   unsigned char originalbyte;
   CHANGEREGONBPINFO changereginfo;
 } ChangeRegBPEntry, *PChangeRegBPEntry;
+
+typedef struct
+{
+  int triggered; //set to true if it has been started
+  QWORD triggeredcr3;
+  QWORD triggeredfsbase;
+  QWORD triggeredgsbase;
+  int count; //number of steps left to log
+
+  int shouldquit;
+  int finished;
+  QWORD PhysicalAddress;
+  unsigned char originalbyte;
+  PCloakedPageData cloakdata; //needed to disable it
+
+  //copy from here to the client
+  int datatype;
+  int numberOfEntries;
+  union
+  {
+    PageEventBasic basic[0];
+    PageEventExtended extended[0];
+    PageEventBasicWithStack basics[0];
+    PageEventExtendedWithStack extendeds[0];
+  } pe;
+
+} TraceOnBPEntry, *PTraceOnBPEntry;
+
+typedef struct
+{
+  int inuse;//1 if this entry contains a thread
+  int continueMethod; //0=no, 1=single step, 2=run  (resets to 0 after taking a step.  if 2 then inuse turns false
+  int watchid; //the watchid that caused the break.  -1 if it's a single step
+
+  QWORD UserModeLoop; //where to go to after a step
+  QWORD KernelModeLoop;
+
+  PageEventExtended state; //contains CR3, FSBASE and GSBASE
+} BrokenThreadEntry, *PBrokenThreadEntry;
 
 
 #endif /* VMM_EPTSTRUCTS_H_ */

@@ -1,6 +1,9 @@
 #pragma once
 
 #include <Pipe.h>
+#ifndef _WINDOWS
+#include "Metadata.h"
+#endif
 
 #define MONOCMD_INITMONO 0
 #define MONOCMD_OBJECT_GETCLASS 1
@@ -41,10 +44,18 @@
 #define MONOCMD_GETVTABLEFROMCLASS 35
 #define MONOCMD_GETMETHODPARAMETERS 36
 #define MONOCMD_ISCLASSGENERIC 37
+#define MONOCMD_ISIL2CPP 38
+#define MONOCMD_FILLOPTIONALFUNCTIONLIST 39
+#define MONOCMD_GETSTATICFIELDVALUE 40
+#define MONOCMD_SETSTATICFIELDVALUE 41
+#define MONOCMD_GETCLASSIMAGE 42
+#define MONOCMD_FREE 43
+#define MONOCMD_GETIMAGEFILENAME 44
+#define MONOCMD_GETCLASSNESTINGTYPE 45
 
 
-typedef struct MonoType;
-typedef struct MonoMethodSignature;
+typedef struct {} MonoType;
+typedef struct {} MonoMethodSignature;
 typedef void * gpointer;
 
 typedef void (__cdecl *MonoDomainFunc) (void *domain, void *user_data);
@@ -55,6 +66,7 @@ typedef void (__cdecl *G_FREE)(void *ptr);
 typedef void* (__cdecl *MONO_GET_ROOT_DOMAIN)(void);
 typedef void* (__cdecl *MONO_THREAD_ATTACH)(void *domain);
 typedef void (__cdecl *MONO_THREAD_DETACH)(void *monothread);
+typedef void (__cdecl *MONO_THREAD_CLEANUP)(void);
 typedef void* (__cdecl *MONO_OBJECT_GET_CLASS)(void *object);
 
 typedef void (__cdecl *MONO_DOMAIN_FOREACH)(MonoDomainFunc func, void *user_data);
@@ -67,6 +79,8 @@ typedef void* (__cdecl *MONO_ASSEMBLY_OPEN)(void *fname, int *status);
 typedef void* (__cdecl *MONO_IMAGE_GET_ASSEMBLY)(void *image);
 typedef char* (__cdecl *MONO_IMAGE_GET_NAME)(void *image);
 typedef void* (__cdecl *MONO_IMAGE_OPEN)(const char *fname, int *status);
+typedef char* (__cdecl *MONO_IMAGE_GET_FILENAME)(void *image);
+
 
 typedef void* (__cdecl *MONO_IMAGE_GET_TABLE_INFO)(void *image, int table_id);
 typedef int (__cdecl *MONO_TABLE_INFO_GET_ROWS)(void *tableinfo);
@@ -86,7 +100,9 @@ typedef void* (__cdecl *MONO_CLASS_GET_METHODS)(void *klass, void *iter);
 typedef void* (__cdecl *MONO_CLASS_GET_METHOD_FROM_NAME)(void *klass, char *methodname, int paramcount);
 typedef void* (__cdecl *MONO_CLASS_GET_FIELDS)(void *klass, void *iter);
 typedef void* (__cdecl *MONO_CLASS_GET_PARENT)(void *klass);
+typedef void* (__cdecl *MONO_CLASS_GET_IMAGE)(void *klass);
 typedef void* (__cdecl *MONO_CLASS_VTABLE)(void *domain, void *klass);
+typedef int (__cdecl *MONO_CLASS_INSTANCE_SIZE)(void *klass);
 typedef void* (__cdecl *MONO_CLASS_FROM_MONO_TYPE)(void *type);
 typedef void* (__cdecl *MONO_CLASS_GET_ELEMENT_CLASS)(void *klass);
 typedef int (__cdecl *MONO_CLASS_IS_GENERIC)(void *klass);
@@ -163,20 +179,46 @@ typedef void* (__cdecl *MONO_RUNTIME_INVOKE)(void *method, void *obj, void **par
 typedef void* (__cdecl *MONO_RUNTIME_INVOKE_ARRAY)(void *method, void *obj, void *params, void **exc);
 typedef void* (__cdecl *MONO_RUNTIME_OBJECT_INIT)(void *object);
 
+typedef void* (__cdecl *MONO_FIELD_STATIC_GET_VALUE)(void *vtable, void* field, void* output);
+typedef void* (__cdecl *MONO_FIELD_STATIC_SET_VALUE)(void *vtable, void* field, void* input);
+
+typedef void* (__cdecl *IL2CPP_FIELD_STATIC_GET_VALUE)(void* field, void* output);
+typedef void* (__cdecl *IL2CPP_FIELD_STATIC_SET_VALUE)(void* field, void* input);
+
 typedef void* (__cdecl *MONO_VALUE_BOX)(void *domain, void *klass, void* val);
 typedef void* (__cdecl *MONO_OBJECT_UNBOX)(void *obj);
 typedef void* (__cdecl *MONO_CLASS_GET_TYPE)(void *klass);
+typedef void* (__cdecl *MONO_CLASS_GET_NESTING_TYPE)(void *klass);
 
 
 
+//il2cpp:
+typedef UINT_PTR* (__cdecl *IL2CPP_DOMAIN_GET_ASSEMBLIES)(void * domain, SIZE_T *size);
 
+typedef int(__cdecl *IL2CPP_IMAGE_GET_CLASS_COUNT)(void* image);
+typedef void*(__cdecl *IL2CPP_IMAGE_GET_CLASS)(void *image, int index);
+
+typedef char*(__cdecl *IL2CPP_TYPE_GET_NAME)(void* ptype);
+typedef char*(__cdecl *IL2CPP_TYPE_GET_ASSEMBLY_QUALIFIED_NAME)(void* ptype);
+
+typedef int(__cdecl *IL2CPP_METHOD_GET_PARAM_COUNT)(void* method);
+typedef char*(__cdecl *IL2CPP_METHOD_GET_PARAM_NAME)(void *method, int index);
+typedef void*(__cdecl *IL2CPP_METHOD_GET_PARAM)(void *method, int index);
+typedef void*(__cdecl *IL2CPP_METHOD_GET_RETURN_TYPE)(void *method);
+typedef void*(__cdecl *IL2CPP_CLASS_FROM_TYPE)(void *type);
+typedef wchar_t*(__cdecl *IL2CPP_STRING_CHARS)(void *stringobject);
 
 
 class CPipeServer : Pipe
 {
-private:	
+private:
+    #ifdef _WINDOWS
 	wchar_t datapipename[256];
 	wchar_t eventpipename[256];
+    #else
+    char* datapipename[256];
+    char* eventpipename[256];
+    #endif
 
 	void *mono_selfthread;
 
@@ -184,11 +226,14 @@ private:
 	MONO_GET_ROOT_DOMAIN mono_get_root_domain;
 	MONO_THREAD_ATTACH mono_thread_attach;
 	MONO_THREAD_DETACH mono_thread_detach;
+    MONO_THREAD_CLEANUP mono_thread_cleanup;
 	MONO_OBJECT_GET_CLASS mono_object_get_class;
 	MONO_CLASS_GET_NAME mono_class_get_name;
 	MONO_CLASS_GET_NAMESPACE mono_class_get_namespace;
 	MONO_CLASS_GET_PARENT mono_class_get_parent;
+	MONO_CLASS_GET_IMAGE mono_class_get_image;	
 	MONO_CLASS_VTABLE mono_class_vtable;
+	MONO_CLASS_INSTANCE_SIZE mono_class_instance_size;
 	MONO_CLASS_FROM_MONO_TYPE mono_class_from_mono_type;
 	MONO_CLASS_IS_GENERIC mono_class_is_generic;
 
@@ -199,9 +244,10 @@ private:
 	MONO_ASSEMBLY_GET_IMAGE mono_assembly_get_image;
 	MONO_IMAGE_GET_ASSEMBLY mono_image_get_assembly;
 	MONO_ASSEMBLY_OPEN mono_assembly_open;
-	
+		
 	MONO_IMAGE_GET_NAME mono_image_get_name;
 	MONO_IMAGE_GET_TABLE_INFO mono_image_get_table_info;
+	MONO_IMAGE_GET_FILENAME mono_image_get_filename;
     MONO_IMAGE_RVA_MAP mono_image_rva_map;
 	MONO_IMAGE_OPEN mono_image_open;
 	MONO_IMAGE_LOADED mono_image_loaded;
@@ -277,12 +323,40 @@ private:
 	MONO_VALUE_BOX mono_value_box;
 	MONO_OBJECT_UNBOX mono_object_unbox;
 	MONO_CLASS_GET_TYPE mono_class_get_type;
+	MONO_CLASS_GET_NESTING_TYPE mono_class_get_nesting_type;
+
 
 	MONO_METHOD_DESC_SEARCH_IN_IMAGE mono_method_desc_search_in_image;
 	MONO_RUNTIME_INVOKE mono_runtime_invoke;
 	MONO_RUNTIME_OBJECT_INIT mono_runtime_object_init;
 
+	MONO_FIELD_STATIC_GET_VALUE mono_field_static_get_value;
+	MONO_FIELD_STATIC_SET_VALUE mono_field_static_set_value;
+
+	//il2cpp
+	IL2CPP_FIELD_STATIC_GET_VALUE il2cpp_field_static_get_value;
+	IL2CPP_FIELD_STATIC_SET_VALUE il2cpp_field_static_set_value;
+
+	IL2CPP_DOMAIN_GET_ASSEMBLIES il2cpp_domain_get_assemblies;
+
+	IL2CPP_IMAGE_GET_CLASS_COUNT il2cpp_image_get_class_count;
+	IL2CPP_IMAGE_GET_CLASS il2cpp_image_get_class;
+
+	IL2CPP_TYPE_GET_NAME il2cpp_type_get_name;
+	IL2CPP_TYPE_GET_ASSEMBLY_QUALIFIED_NAME il2cpp_type_get_assembly_qualified_name;
+
+	IL2CPP_METHOD_GET_PARAM_COUNT il2cpp_method_get_param_count;
+	IL2CPP_METHOD_GET_PARAM_NAME il2cpp_method_get_param_name;
+	IL2CPP_METHOD_GET_PARAM il2cpp_method_get_param;
+	IL2CPP_METHOD_GET_RETURN_TYPE il2cpp_method_get_return_type;
+	IL2CPP_CLASS_FROM_TYPE il2cpp_class_from_type;
+	IL2CPP_STRING_CHARS il2cpp_string_chars;
+
+
 	BOOL attached;
+	BOOL il2cpp;
+
+	BOOL UWPMode;
 
 	void CreatePipeandWaitForconnect(void);
 
@@ -293,6 +367,7 @@ private:
 	void EnumAssemblies();
 	void GetImageFromAssembly();
 	void GetImageName();
+	void GetImageFileName();
 	void EnumClassesInImage();
 	void EnumFieldsInClass();
 	void EnumMethodsInClass();
@@ -308,10 +383,13 @@ private:
 	void GetKlassName();
 	void GetClassNamespace();
 	void FreeMethod();
+	void FreeObject();
 	void DisassembleMethod();
 	void GetMethodSignature();
 	void GetMethodParameters();
 	void GetParentClass();
+	void GetClassNestingType();
+	void GetClassImage();
 	void GetVTableFromClass();
 	void GetStaticFieldAddressFromClass();
 	void GetTypeClass();
@@ -323,6 +401,10 @@ private:
 	void Object_New();
 	void Object_Init();
 	void IsGenericClass();
+	void IsIL2CPP();
+    void FillOptionalFunctionList(); //mainly for unixbased systems
+	void GetStaticFieldValue();
+	void SetStaticFieldValue();
 
 public:
 	CPipeServer(void);
@@ -332,6 +414,7 @@ public:
 
 	char* ReadString(void);
 	void WriteString(const char*);
+	void WriteString1(const char*);
 	void FreeString(char*);
 
 	void *ReadObjectArray(void* domain);

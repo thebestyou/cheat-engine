@@ -5,17 +5,42 @@ unit hexviewunit;
 interface
 
 uses
-  windows, Classes, SysUtils, forms, controls, StdCtrls, ExtCtrls, comctrls, graphics,
-  lmessages, menus,commctrl, symbolhandler, symbolhandlerstructs, cefuncproc, newkernelhandler, math,
-  Clipbrd,dialogs, changelist, DebugHelper, debuggertypedefinitions, maps, contnrs,
-  strutils, byteinterpreter, commonTypeDefs, lazutf8, lazutf16, lcltype;
+{$IFNDEF STANDALONEHV}
+  {$ifdef darwin}
+  macport, macportdefines,
+  {$endif}
+  {$ifdef windows}
+  windows, commctrl,
+  {$endif}
+{$ENDIF}
+  Classes,  sysUtils, forms, controls, StdCtrls, ExtCtrls, comctrls, graphics,
+  lmessages, menus,  math,
+  Clipbrd,dialogs, changelist, maps, contnrs,
+  strutils, lazutf8, lazutf16, lcltype, LCLIntf
+{$ifdef USELAZFREETYPE}
+  ,cefreetype,FPCanvas, EasyLazFreeType, LazFreeTypeFontCollection, LazFreeTypeIntfDrawer,
+  LazFreeTypeFPImageDrawer, IntfGraphics, fpimage, graphtype
+{$endif}
+
+  {$IFNDEF STANDALONEHV}
+  , byteinterpreter, debuggertypedefinitions, DebugHelper ,commonTypeDefs,symbolhandler,
+  symbolhandlerstructs, cefuncproc, NewKernelHandler, CustomTypeHandler
+  {$ENDIF}, bettercontrols;
 
 type
-  TDisplayType = (dtByte, dtByteDec, dtWord, dtWordDec, dtDword, dtDwordDec, dtQword, dtQwordDec, dtSingle, dtDouble);
+  TDisplayType = (dtByte, dtByteDec, dtWord, dtWordDec, dtDword, dtDwordDec, dtQword, dtQwordDec, dtSingle, dtDouble, dtCustom);
   TCharEncoding = (ceAscii, ceCodepage, ceUtf8, ceUtf16);
 
+
+  THexViewColorsState=(hcsUndefined=-1, hcsNormal=0, hcsStatic=1, hcsHighlighted=2, hcsEditing=3, hcsSecondaryEditing=4, hcsBreakpoint=5, hcsDifferent=6);
+  THexViewColors=array [hcsNormal..hcsDifferent] of record
+    backgroundcolor: TColor;
+    fontcolor: TColor;
+  end;
+
+
 const
-  DisplayTypeByteSize: array [dtByte..dtDouble] of integer =(1,1, 2,2, 4, 4, 8,8, 4, 8); //update both if adding something new
+  DisplayTypeByteSizeConstArray: array [dtByte..dtDouble] of integer =(1,1, 2,2, 4, 4, 8,8, 4, 8); //update both if adding something new, excluding dtCustom
 
 
 type
@@ -49,6 +74,7 @@ type
     addresswidthdefault: integer;
     charsize, bytesize, byteSizeWithoutChar: integer;
 
+
     memoryInfo: string;
     memoryInfo_allocationbasepos: integer;
     memoryInfo_allocationbaseend: integer;
@@ -76,6 +102,7 @@ type
     editingType: THexRegion;
     selectionType: THexRegion;
     fDisplayType: TDisplayType; //determines what to display. If anything other than byte the editing/selecting mode will be disabled
+    fCustomType: TCustomType;
     fCharEncoding: TCharEncoding;
 
 
@@ -110,6 +137,13 @@ type
 
     usedRelativeBase: boolean;
 
+{$ifdef USELAZFREETYPE}
+    FTFont: TFreeTypeFont;
+    IntfImage: TLazIntfImage;
+    drawer: TIntfFreeTypeDrawer;
+ {$endif}
+
+    fcr3: qword;
 
     procedure setHexFont(f: TFont);
 
@@ -140,6 +174,7 @@ type
     function getQWordDec(a: ptrUint; full: boolean=false): string;
     function getSingle(a: ptrUint; full: boolean=false): string;
     function getDouble(a: ptrUint; full: boolean=false): string;
+    function getCustomTypeValue(a: ptruint; full: boolean=false): string;
     function getChar(a: ptrUint; out charlength: integer): string;
     function inModule(a: ptrUint): boolean;
     procedure MouseScroll(Sender: TObject; Shift: TShiftState; WheelDelta: Integer; MousePos: TPoint; var Handled: Boolean);
@@ -165,12 +200,26 @@ type
     procedure lineUp(sender: tobject);
     procedure lineDown(sender: TObject);
 
+    function DisplayTypeByteSize(dt: TDisplayType): integer; inline;
+    procedure setCR3(pa: QWORD);
+
+
+    function ReadProcessMemory(hProcess: THandle; lpBaseAddress, lpBuffer: Pointer; nSize: size_t; var lpNumberOfBytesRead: PTRUINT): BOOL;
+    function WriteProcessMemory(hProcess: THandle; const lpBaseAddress: Pointer; lpBuffer: Pointer; nSize: DWORD; var lpNumberOfBytesWritten: PTRUINT): BOOL;
+    function VirtualQueryEx(hProcess: THandle; lpAddress: Pointer; var lpBuffer: TMemoryBasicInformation; dwLength: DWORD): DWORD;
   protected
     procedure KeyDown(var Key: Word; Shift: TShiftState); override;
     procedure UTF8KeyPress(var UTF8Key: TUTF8Char); override;
   public
+    colors: THexViewColors;
+    fseperatorColor: tcolor;
+    fcursorcolor: tcolor;
+    ftoplinecolor: tcolor;
+    ffadeColor: tcolor;
+
     fadetimer: integer;
     statusbar: TStatusbar;
+    lastrendertime: qword;
     procedure LockRowsize(size: integer=0);
     procedure UnlockRowsize;
     procedure CopySelectionToClipboard;
@@ -212,6 +261,7 @@ type
     property SelectionStop: ptruint read getSelectionStop;
     property Osb: TBitmap read offscreenbitmap;
     property DisplayType: TDisplayType read fDisplayType write setDisplayType;
+    property CustomType: TcustomType read fCustomType write fCustomType;
     property CharEncoding: TCharEncoding read fCharEncoding write setCharEncoding;
     property BytesPerSeperator: integer read fbytesPerSeperator write setBytesPerSeperator;
     property OnByteSelect: TByteSelectEvent read fOnByteSelect write fOnByteSelect;
@@ -227,12 +277,36 @@ type
     property spaceBetweenLines: integer read fspaceBetweenLines write fspaceBetweenLines;
     property UseRelativeBase: boolean read fUseRelativeBase write fUseRelativeBase;
     property RelativeBase: ptruint read fRelativeBase write fRelativeBase;
+
+    property seperatorColor: tcolor read fseperatorColor write fseperatorColor;
+    property cursorcolor: tcolor read fcursorcolor write fcursorcolor;
+    property toplinecolor: tcolor read ftoplinecolor write ftoplinecolor;
+    property fadeColor: tcolor read ffadeColor write ffadeColor;
+
+
+    property normalFontColor: TColor read colors[hcsNormal].fontcolor write colors[hcsNormal].fontcolor;
+    property normalBackgroundColor: TColor read colors[hcsNormal].backgroundcolor write colors[hcsNormal].backgroundcolor;
+    property staticFontColor: TColor read colors[hcsstatic].fontcolor write colors[hcsstatic].fontcolor;
+    property staticBackgroundColor: TColor read colors[hcsstatic].backgroundcolor write colors[hcsstatic].backgroundcolor;
+    property highlightedFontColor: TColor read colors[hcshighlighted].fontcolor write colors[hcshighlighted].fontcolor;
+    property highlightedBackgroundColor: TColor read colors[hcshighlighted].backgroundcolor write colors[hcshighlighted].backgroundcolor;
+    property editingFontColor: TColor read colors[hcsediting].fontcolor write colors[hcsediting].fontcolor;
+    property editingBackgroundColor: TColor read colors[hcsediting].backgroundcolor write colors[hcsediting].backgroundcolor;
+    property secondaryeditingFontColor: TColor read colors[hcssecondaryediting].fontcolor write colors[hcssecondaryediting].fontcolor;
+    property secondaryeditingBackgroundColor: TColor read colors[hcssecondaryediting].backgroundcolor write colors[hcssecondaryediting].backgroundcolor;
+    property breakpointFontColor: TColor read colors[hcsbreakpoint].fontcolor write colors[hcsbreakpoint].fontcolor;
+    property breakpointBackgroundColor: TColor read colors[hcsbreakpoint].backgroundcolor write colors[hcsbreakpoint].backgroundcolor;
+    property differentFontColor: TColor read colors[hcsdifferent].fontcolor write colors[hcsdifferent].fontcolor;
+    property differentBackgroundColor: TColor read colors[hcsdifferent].backgroundcolor write colors[hcsdifferent].backgroundcolor;
+    property CR3: QWORD read fCR3 write setCR3;
   end;
 
 implementation
 
+{$IFNDEF STANDALONEHV}
 uses formsettingsunit, Valuechange, MainUnit, ProcessHandlerUnit, parsers,
-  StructuresFrm2, MemoryBrowserFormUnit, BreakpointTypeDef;
+  StructuresFrm2, MemoryBrowserFormUnit, BreakpointTypeDef, globals, DBK32functions;
+{$ENDIF}
 
 resourcestring
   rsBigFuckingError = 'Big fucking error';
@@ -259,6 +333,59 @@ resourcestring
   rsModule = 'Module';
   rsAddress = 'address';
   rsBytes = 'bytes';
+
+  {$IFDEF STANDALONEHV}
+  var
+    processhandle: thandle=0;
+    processhandler:record
+      pointersize: integer;
+    end=(pointersize: 8);
+
+procedure movememory(destination, source: pointer; size: integer);
+begin
+  system.Move(source^, destination^, size);
+end;
+
+procedure copymemory(destination, source: pointer; size: integer);
+begin
+  movememory(destination,source,size);
+end;
+
+  function ReadProcessMemory(h: thandle; a: pointer; b: pointer; s: integer; var br: ptruint):boolean;
+  begin
+    result:=true;
+    br:=s;
+  end;
+
+  function WriteProcessMemory(h: thandle; a: pointer; b: pointer; s: integer; var bw: ptruint):boolean;
+  begin
+    result:=true;
+    bw:=s;
+  end;
+
+  function MinX(a, b: ptrUint): ptrUint;inline;
+  begin
+    if a < b then
+      Result := a
+    else
+      Result := b;
+  end;
+
+
+  function MaxX(a, b: ptrUint): ptrUint;inline;
+  begin
+    if a > b then
+      Result := a
+    else
+      Result := b;
+  end;
+
+
+  function InRangeX(const AValue, AMin, AMax: ptrUint): Boolean;inline;
+  begin
+    Result:=(AValue>=AMin) and (AValue<=AMax);
+  end;
+  {$ENDIF}
 
 function THexview.gethasSelection: boolean;
 begin
@@ -374,6 +501,14 @@ begin
   update;
 end;
 
+function THexView.DisplayTypeByteSize(dt: TDisplayType): integer; inline;
+begin
+  if dt<=dtdouble then
+    exit(DisplayTypeByteSizeConstArray[dt])
+  else
+    exit(fCustomType.bytesize);
+end;
+
 procedure THexView.setDisplayType(newdt: TDisplaytype);
 begin
   fDisplayType:=newdt;
@@ -419,6 +554,7 @@ begin
 end;
 
 procedure THexView.HandleEditKeyPress(wkey: TUTF8Char);
+{$IFNDEF STANDALONEHV}
 var
     b: byte;
     w: widestring;
@@ -432,8 +568,10 @@ var
     hex: boolean;
 
     key: char;
+{$ENDIF}
 
 begin
+  {$IFNDEF STANDALONEHV}
   if not isediting then exit;
 
   b:=getByte(selected,unreadable);
@@ -472,11 +610,12 @@ begin
       dtQwordDec: s:=getQWordDec(selected, true);
       dtSingle: s:=getSingle(selected, true);
       dtDouble: s:=getDouble(selected, true);
+      dtCustom: s:=getCustomTypeValue(selected, true);
     end;
 
-    if (key in [#7, #8]) then
+    if (key in [#7, #8]) then  //delete, backspace
     begin
-      if (fDisplayType in [dtByteDec, dtWordDec, dtDwordDec, dtQwordDec, dtSingle, dtDouble])  then
+      if (fDisplayType in [dtByteDec, dtWordDec, dtDwordDec, dtQwordDec, dtSingle, dtDouble, dtCustom])  then
       begin
         if key=#7 then //delete
         begin
@@ -502,7 +641,7 @@ begin
       //replace the key with the provided one
       if (key in [',','.']) then
       begin
-        if not (fDisplayType in [dtSingle, dtDouble]) then exit; //do , or . support for non float types
+        if not (fDisplayType in [dtSingle, dtDouble, dtCustom]) then exit; //do , or . support for non float types
         s:=copy(s, 1, editingcursorpos);
       end
       else
@@ -559,10 +698,16 @@ begin
         vtype:=vtDouble;
         hex:=false;
       end;
+
+      dtCustom:
+      begin
+        vtype:=vtCustom;
+        hex:=false;
+      end;
     end;
 
     try
-      ParseStringAndWriteToAddress(s, selected, vtype, hex);
+      ParseStringAndWriteToAddress(s, selected, vtype, hex, fcustomtype);
       case key of
         #8: if editingCursorPos>0 then dec(editingCursorPos); //backspace
         #7: ; //do nothing with the cursor
@@ -576,9 +721,9 @@ begin
     if editingCursorPos>=length(s) then
     begin
       //at the end of the line
-      if not (fDisplayType in [dtByteDec, dtWordDec, dtDwordDec, dtQwordDec, dtSingle, dtDouble]) then //if not a decimal type then go to the next address
+      if not (fDisplayType in [dtByteDec, dtWordDec, dtDwordDec, dtQwordDec, dtSingle, dtDouble, dtCustom]) then //if not a decimal type then go to the next address
       begin
-        selected:=selected+DisplayTypeByteSize[fDisplayType];
+        selected:=selected+DisplayTypeByteSize(fDisplayType);
         editingCursorPos:=0;
       end;
     end;
@@ -617,6 +762,7 @@ begin
 
 
   update;
+  {$ENDIF}
 end;
 
 procedure THexView.RefocusIfNeeded;
@@ -685,7 +831,7 @@ begin
 
       region:=hrByte;
 
-      result:=fAddress+bytesperline*row+column - (column mod DisplayTypeByteSize[fDisplayType]);
+      result:=fAddress+bytesperline*row+column - (column mod DisplayTypeByteSize(fDisplayType));
     end
     else
     if InRange(x,charstart,charstart+bytesperline*charsize) then
@@ -732,7 +878,7 @@ begin
     case key of
       VK_DELETE:
       begin
-        if isediting and (fDisplayType in [dtByteDec, dtWordDec, dtDwordDec, dtQwordDec, dtSingle, dtDouble]) then
+        if isediting and (fDisplayType in [dtByteDec, dtWordDec, dtDwordDec, dtQwordDec, dtSingle, dtDouble, dtCustom]) then
           HandleEditKeyPress(chr(7)); //there's no delete char and I can't be assed to change the whole function to tak a virtual key
 
         key:=0;
@@ -743,7 +889,7 @@ begin
       begin
         if isediting then
         begin
-          if fDisplayType in [dtByteDec, dtWordDec, dtDwordDec, dtQwordDec, dtSingle, dtDouble] then
+          if fDisplayType in [dtByteDec, dtWordDec, dtDwordDec, dtQwordDec, dtSingle, dtDouble, dtCustom] then
           begin
             //try to delete the selected character (note that single and double do not always co-operate)
             HandleEditKeyPress(chr(8));
@@ -808,7 +954,7 @@ begin
             dec(editingCursorPos);
             if editingCursorPos<0 then
             begin
-              selected:=selected-DisplayTypeByteSize[fDisplayType];
+              selected:=selected-DisplayTypeByteSize(fDisplayType);
               case fDisplayType of
                 dtByteDec: editingCursorPos:=length(getByteDec(selected));
                 dtWordDec: editingCursorPos:=length(getWordDec(selected));
@@ -816,8 +962,9 @@ begin
                 dtQwordDec: editingCursorPos:=length(getQWordDec(selected));
                 dtSingle: editingCursorPos:=length(getSingle(selected));
                 dtDouble: editingCursorPos:=length(getDouble(selected));
+                dtCustom: editingCursorPos:=length(getCustomTypeValue(selected));
                 else
-                  editingCursorPos:=  DisplayTypeByteSize[fDisplayType]*2-1;
+                  editingCursorPos:=  DisplayTypeByteSize(fDisplayType)*2-1;
               end;
 
 
@@ -850,13 +997,14 @@ begin
               dtQwordDec: x:=length(getQWordDec(selected))+1;
               dtSingle: x:=length(getSingle(selected))+1;
               dtDouble: x:=length(getDouble(selected))+1;
+              dtCustom: x:=length(getCustomTypeValue(selected))+1;
               else
-                x:=2*DisplayTypeByteSize[fDisplayType]
+                x:=2*DisplayTypeByteSize(fDisplayType)
             end;
 
             if editingCursorPos>=x then
             begin
-              selected:=selected+DisplayTypeByteSize[fDisplayType];
+              selected:=selected+DisplayTypeByteSize(fDisplayType);
               editingCursorPos:=0;
             end;
           end;
@@ -892,7 +1040,7 @@ begin
         if isEditing then
         begin
           b:=0;
-          if (ReadProcessMemory(processhandle, pointer(selected),@b,1,x)) or (UseFileAsMemory)  then
+          if (ReadProcessMemory(processhandle, pointer(selected),@b,1,x)) {$IFNDEF STANDALONEHV} or (UseFileAsMemory) {$ENDIF}  then
           begin
             if key=VK_SUBTRACT then
               dec(b)
@@ -942,15 +1090,22 @@ begin
     end;
 
   end;
-  RefocusIfNeeded;
+
+  if (key<VK_SHIFT) or (key>VK_MENU) then
+    RefocusIfNeeded;
 
   inherited KeyDown(key,shift);
 end;
 
 
 procedure THexView.AddSelectedAddressToCheatTable;
+{$IFNDEF STANDALONEHV}
 var Vartype: Tvariabletype;
+ctname: string;
+{$ENDIF}
 begin
+  {$IFNDEF STANDALONEHV}
+  ctname:='';
   if fhasSelection or isediting then //selected
   begin
     case fdisplaytype of
@@ -960,12 +1115,18 @@ begin
       dtQword, dtQwordDec: vartype:=vtQword;
       dtSingle: vartype:=vtSingle;
       dtDouble: vartype:=vtDouble;
+      dtCustom:
+      begin
+        vartype:=vtCustom;
+        ctname:=fCustomType.name;
+      end
       else
         vartype:=vtDword;
     end;
 
-    mainform.addresslist.addAddressManually(inttohex(selected,8), Vartype);
+    mainform.addresslist.addAddressManually(inttohex(selected,8), Vartype, ctname);
   end;
+  {$ENDIF}
 
 end;
 
@@ -1027,7 +1188,7 @@ begin
     else
     begin
 
-      toAddress:=toAddress+DisplayTypeByteSize[fDisplayType]-1;
+      toAddress:=toAddress+DisplayTypeByteSize(fDisplayType)-1;
       s:='';
       while fromaddress<=toAddress do
       begin
@@ -1042,6 +1203,7 @@ begin
           dtQwordDec: s:=s+getQWordDec(fromaddress, true);
           dtSingle: s:=s+getSingle(fromaddress, true);
           dtDouble: s:=s+getDouble(fromaddress, true);
+          dtCustom: s:=s+getCustomTypeValue(fromaddress, true);
         end;
 
          //byte array
@@ -1053,7 +1215,7 @@ begin
         //else
         //  s:=s+'?? ';
 
-        inc(fromAddress, DisplayTypeByteSize[fDisplayType]);
+        inc(fromAddress, DisplayTypeByteSize(fDisplayType));
         if fromaddress<=toAddress then
           s:=s+' ';
       end;
@@ -1074,11 +1236,21 @@ fromAddress, toAddress: ptrUint;
 
 
 begin
+  {$IFNDEF STANDALONEHV}
   if isEditing or fhasSelection then
   begin
+
     s:=clipboard.AsText;
-    fromAddress:=MinX(selected,selected2);
-    toAddress:=MaxX(selected,selected2);
+    if isediting then
+    begin
+      fromAddress:=selected;
+      toaddress:=selected;
+    end
+    else
+    begin
+      fromAddress:=MinX(selected,selected2);
+      toAddress:=MaxX(selected,selected2);
+    end;
 
 
     try
@@ -1138,43 +1310,56 @@ begin
 
         inc(i);
         inc(fromaddress);
+
+        if isediting then
+          selected:=selected+1;
       end;
 
     end;
     update;
 
   end;
+ {$ENDIF}
 
 
 end;
 
 procedure THexView.ChangeSelected;
-var unreadable: boolean;
+{$IFNDEF STANDALONEHV}
+var
+  unreadable: boolean;
+  vcf: Tvaluechangeform;
+{$ENDIF}
 begin
+  {$IFNDEF STANDALONEHV}
   if isEditing or fhasSelection then
   begin
     getByte(selected,unreadable);
     if unreadable then exit;
 
-    with Tvaluechangeform.Create(application) do
-    begin
-      address:=selected;
-
-      case fDisplayType of
-        dtByte, dtByteDec: VarType:=vtByte;
-        dtWord, dtWordDec: Vartype:=vtWord;
-        dtDword, dtDwordDec: Vartype:=vtDword;
-        dtQword, dtQwordDec: vartype:=vtQword;
-        dtSingle: vartype:=vtSingle;
-        dtDouble: vartype:=vtDouble;
-      end;
-      ShowModal;
+    vcf:=Tvaluechangeform.Create(application);
+    vcf.address:=selected;
+    case fDisplayType of
+      dtByte, dtByteDec: vcf.VarType:=vtByte;
+      dtWord, dtWordDec: vcf.Vartype:=vtWord;
+      dtDword, dtDwordDec: vcf.Vartype:=vtDword;
+      dtQword, dtQwordDec: vcf.vartype:=vtQword;
+      dtSingle: vcf.vartype:=vtSingle;
+      dtDouble: vcf.vartype:=vtDouble;
+      //todo: Add customtype support to the valuechangeform
     end;
+
+    if fdisplaytype in [dtWord, dtDword, dtQword] then
+       vcf.unicode:=true;
+
+    vcf.ShowModal;
     update;
   end;
+  {$ENDIF}
 end;
 
 procedure THexView.mbCanvasDoubleClick(Sender: TObject);
+{$IFNDEF STANDALONEHV}
 var
   p: tpoint;
   allocrangestart: integer;
@@ -1183,11 +1368,12 @@ var
   baserangestart: integer;
   baserangestop: integer;
   mbi: TMEMORYBASICINFORMATION;
+{$ENDIF}
 begin
-  changeSelected;
-
+  {$IFNDEF STANDALONEHV}
   p:=mouse.CursorPos;
   p:=ScreenToClient(p);
+
   //doubleclick doesn't happen often, so can be slow
   if p.y<mbCanvas.Canvas.GetTextHeight(memoryInfo) then
   begin
@@ -1213,7 +1399,10 @@ begin
       exit;
     end;
 
-  end;
+  end
+  else
+    changeSelected;
+ {$ENDIF}
 
 end;
 
@@ -1247,10 +1436,10 @@ begin
         fhasSelection:=false;
 
         {$ifdef EDITWHEREYOUCLICK}   //add this define if you wish to start the editor at the spot you click insetad of the start
-        byteclickpos:=(x-bytestart)-(((x-bytestart) div (byteSizeWithoutChar*DisplayTypeByteSize[fDisplayType])) * bytesizeWithoutChar*DisplayTypeByteSize[fDisplayType]);
+        byteclickpos:=(x-bytestart)-(((x-bytestart) div (byteSizeWithoutChar*DisplayTypeByteSize(fDisplayType))) * bytesizeWithoutChar*DisplayTypeByteSize(fDisplayType));
         editingCursorPos:=(byteclickpos div charsize);
-        if editingCursorPos>DisplayTypeByteSize[fDisplayType]*2 then
-          editingCursorPos:=DisplayTypeByteSize[fDisplayType]*2-1;
+        if editingCursorPos>DisplayTypeByteSize(fDisplayType)*2 then
+          editingCursorPos:=DisplayTypeByteSize(fDisplayType)*2-1;
         {$endif}
 
 
@@ -1326,10 +1515,10 @@ begin
           if hr=hrByte then
           begin
             //update the cursor position
-            byteclickpos:=(x-bytestart)-(((x-bytestart) div (byteSizeWithoutChar*DisplayTypeByteSize[fDisplayType])) * bytesizeWithoutChar*DisplayTypeByteSize[fDisplayType]);
+            byteclickpos:=(x-bytestart)-(((x-bytestart) div (byteSizeWithoutChar*DisplayTypeByteSize(fDisplayType))) * bytesizeWithoutChar*DisplayTypeByteSize(fDisplayType));
             editingCursorPos:=(byteclickpos div charsize);
-            if editingCursorPos>DisplayTypeByteSize[fDisplayType]*2 then
-              editingCursorPos:=DisplayTypeByteSize[fDisplayType]*2-1;
+            if editingCursorPos>DisplayTypeByteSize(fDisplayType)*2 then
+              editingCursorPos:=DisplayTypeByteSize(fDisplayType)*2-1;
 
           end;
         end;
@@ -1392,7 +1581,7 @@ var
   shiftispressed: boolean;
 begin
 
-  shiftispressed:=GetBit(15, GetKeyState(VK_SHIFT))=1;
+  shiftispressed:=(GetKeyState(VK_SHIFT) and (1 shl 15))>0;  //GetBit(15, GetKeyState(VK_SHIFT))=1;
 
   SetFocus; //get the focus back
 
@@ -1442,7 +1631,7 @@ var
   i: integer;
   shiftispressed: boolean;
 begin
-  shiftispressed:=GetBit(15, GetKeyState(VK_SHIFT))=1;
+  shiftispressed:=(GetKeyState(VK_SHIFT) and (1 shl 15))>0; //GetBit(15, GetKeyState(VK_SHIFT))=1;
   if shiftispressed then
   begin
     if WheelDelta>0 then
@@ -1465,12 +1654,15 @@ begin
 end;
 
 procedure THexView.UpdateMemoryInfo;
+{$IFNDEF STANDALONEHV}
 var
-  mbi: TMEMORYBASICINFORMATION;
+  mbi: {$ifdef darwin}macport.{$endif}TMEMORYBASICINFORMATION;
   a: ptrUint;
   a64: qword;
   mi: TModuleInfo;
+{$ENDIF}
 begin
+  {$IFNDEF STANDALONEHV}
   try
     zeromemory(@mbi,sizeof(mbi));
     Virtualqueryex(processhandle,pointer(fAddress),mbi,sizeof(mbi));
@@ -1503,15 +1695,21 @@ begin
 
     memoryinfo:=memoryinfo+' '+rsSize+'='+IntTohex(mbi.RegionSize, 1);
 
-    if (formsettings<>nil) and assigned(GetPhysicalAddress) and formsettings.cbKernelOpenProcess.checked and GetPhysicalAddress(processhandle,pointer(fAddress),a64) then
+    {$ifdef windows}
+    if (formsettings<>nil) and
+        formsettings.cbKernelOpenProcess.checked and
+        GetPhysicalAddress(processhandle,pointer(fAddress),a64) then
       memoryInfo:=memoryInfo+' '+rsPhysicalAddress+'='+IntToHex(a64, 8);
+    {$endif}
 
 
-    if symhandler.getmodulebyaddress(fAddress,mi) then
+
+    if (fcr3=0) and symhandler.getmodulebyaddress(fAddress,mi) then
       memoryInfo:=memoryInfo+' '+rsModule+'='+mi.modulename;
 
   except
   end;
+  {$ENDIF}
 end;
 
 procedure THexView.LoadMemoryRegion;
@@ -1534,7 +1732,11 @@ begin
     p.baseaddress:=a;
     p.readable:=readprocessmemory(processhandle, pointer(a), @p.data[0], 4096,x);
     if p.readable then
-      p.inModule:=symhandler.inModule(a)
+{$IFDEF STANDALONEHV}
+      p.inModule:=(a and (1 shl 12))>0
+{$else}
+      p.inModule:=((fcr3=0) and symhandler.inModule(a))
+{$ENDIF}
     else
       p.inModule:=false;
 
@@ -1783,6 +1985,36 @@ begin
     result:=copy(result,1,18)+'...';
 end;
 
+function THexView.getCustomTypeValue(a: ptruint; full: boolean=false): string;
+var
+  bytes: array of byte;
+  i: integer;
+  err: boolean;
+  f: single;
+begin
+  setlength(bytes, customtype.bytesize);
+  for i:=0 to customtype.bytesize-1 do
+  begin
+    bytes[i]:=getbyte(a+i, err);
+    if err then
+      exit('???');
+  end;
+
+  if CustomType.scriptUsesFloat then
+  begin
+    f:=CustomType.ConvertDataToFloat(@bytes[0],a);
+    result:=format('%f',[f]);
+  end
+  else
+  begin
+    i:=customtype.ConvertDataToInteger(@bytes[0],a);
+    result:=format('%d',[i]);
+  end;
+
+  if (not full) and (length(result)>customtype.bytesize*2+customtype.bytesize-1) then
+    result:=copy(result,1,customtype.bytesize*2+customtype.bytesize-4)+'...';
+
+end;
 
 function THexView.getChar(a: ptrUint; out charlength: integer): string;
 var err: boolean;
@@ -1933,7 +2165,9 @@ var
   compareToAddress: ptruint;
   different: boolean;
 
+{$IFNDEF STANDALONEHV}
   bp: PBreakpoint;
+{$ENDIF}
 
 
   char: string;
@@ -1953,7 +2187,14 @@ var
 
   displayOffset: ptruint;
 
+  starttime: qword;
+  b: tbitmap;
+
+  w,h: integer;
+  fontcolor: tcolor;
+
 begin
+  starttime:=gettickcount64;
   displayOffset:=0;
   if bytesperline<=0 then exit;
   if Parent=nil then exit;
@@ -1971,6 +2212,19 @@ begin
   end;
   seperatormask:=bps-1;
 
+  {$ifdef USELAZFREETYPE}
+  if (not UseOriginalRenderingSystem) and (IntfImage<>nil) then
+  begin
+    w:=offscreenBitmap.Width;
+    h:=offscreenBitmap.Height;
+    if (IntfImage.Width<>w) or (IntfImage.Height<>h) then
+      IntfImage.SetSize(w, h);
+
+    drawer.FillPixels(TColorToFPColor(ColorToRGB(offscreenbitmap.canvas.brush.Color)));
+  end;
+  {$endif}
+
+
 
   setlength(seperators, bytesperline shr seperatorshift);
   seperatorindex:=0;
@@ -1978,12 +2232,36 @@ begin
   currentaddress:=fAddress;
   nextCharAddress:=currentaddress;
 
-  if not useRelativeBase then
-    offscreenbitmap.Canvas.TextOut(0,0,memoryInfo)
-  else
-    offscreenbitmap.Canvas.TextOut(0,0,' '+inttohex(RelativeBase,8)+' : '+memoryInfo);
 
-  offscreenbitmap.Canvas.TextOut(0, textheight, rsAddress);
+
+
+  if not useRelativeBase then
+  begin
+{$ifdef USELAZFREETYPE}
+    if (not UseOriginalRenderingSystem) and (drawer<>nil) then
+      drawer.DrawText(memoryInfo, FTFont,0,0, TColorToFPColor(ColorToRGB(offscreenbitmap.canvas.Font.Color)), [ftaLeft, ftaTop])
+    else
+{$endif}
+    offscreenbitmap.Canvas.TextOut(0,0,memoryInfo)
+  end
+  else
+  begin
+{$ifdef USELAZFREETYPE}
+    if (not UseOriginalRenderingSystem) and (drawer<>nil) then
+      drawer.DrawText(' '+inttohex(RelativeBase,8)+' : '+memoryInfo, FTFont,0,0, TColorToFPColor(ColorToRGB(offscreenbitmap.canvas.Font.Color)), [ftaLeft, ftaTop])
+    else
+{$endif}
+    offscreenbitmap.Canvas.TextOut(0,0,' '+inttohex(RelativeBase,8)+' : '+memoryInfo);
+  end;
+
+{$ifdef USELAZFREETYPE}
+  if (not UseOriginalRenderingSystem) and (drawer<>nil) then
+    drawer.DrawText(rsAddress, FTFont,0,textheight, TColorToFPColor(ColorToRGB(offscreenbitmap.canvas.Font.Color)), [ftaLeft, ftaTop])
+  else
+{$endif}
+    offscreenbitmap.Canvas.TextOut(0, textheight, rsAddress);
+
+
 
   bheader:='';
   cheader:='';
@@ -1991,6 +2269,7 @@ begin
   //(re)initialize the changelist (only has affect if the size is different)
   changelist.Initialize(currentAddress, totallines*bytesperline);
   different:=false;
+
 
   //create header
   initialoffset:=currentaddress and $f;
@@ -2025,6 +2304,7 @@ begin
   charstart:=bytestart+bytesperline*byteSizeWithoutChar;
 
 
+
   for i:=0 to bytesperline-1 do
   begin
     case displayType of
@@ -2033,6 +2313,7 @@ begin
       dtWord, dtWordDec: if (i mod 2)=0 then bheader:=bHeader+inttohex(((currentaddress+i-displayOffset) and $ff),2)+' ' else bheader:=bHeader+'   ';
       dtDWord, dtDwordDec, dtSingle: if (i mod 4)=0 then bheader:=bHeader+inttohex(((currentaddress+i-displayOffset) and $ff),2)+' ' else bheader:=bHeader+'   ';
       dtQword, dtQwordDec, dtDouble: if (i mod 8)=0 then bheader:=bHeader+inttohex(((currentaddress+i-displayOffset) and $ff),2)+' ' else bheader:=bHeader+'   ';
+      dtCustom: if (i mod fcustomtype.bytesize)=0 then bheader:=bHeader+inttohex(((currentaddress+i-displayOffset) and $ff),2)+' ' else bheader:=bHeader+'   ';
     end;
 
     cheader:=cheader+inttohex((initialoffset+i) and $f,1);
@@ -2045,8 +2326,19 @@ begin
   end;
 
 //  bheader:='bpl='+inttostr(bytesperline)+' bytesize='+inttostr(bytesize)+' width='+inttostr(mbcanvas.width);
-  offscreenbitmap.Canvas.TextOut(bytestart,textheight, bheader);
-  offscreenbitmap.Canvas.TextOut(charstart,textheight, cheader);
+{$ifdef USELAZFREETYPE}
+  if (not UseOriginalRenderingSystem) and (drawer<>nil) then
+  begin
+    drawer.DrawText(bheader, FTFont,bytestart,textheight, TColorToFPColor(ColorToRGB(offscreenbitmap.canvas.Font.Color)), [ftaLeft, ftaTop]);
+    drawer.DrawText(cheader, FTFont,charstart,textheight, TColorToFPColor(ColorToRGB(offscreenbitmap.canvas.Font.Color)), [ftaLeft, ftaTop]);
+  end
+  else
+{$endif}
+  begin
+    offscreenbitmap.Canvas.TextOut(bytestart,textheight, bheader);
+    offscreenbitmap.Canvas.TextOut(charstart,textheight, cheader);
+  end;
+
 
 
   itemnr:=0;
@@ -2070,23 +2362,56 @@ begin
     if UseRelativeBase then
     begin
       if currentaddress>=RelativeBase then
-        offscreenbitmap.Canvas.TextOut(0, 2+2*textheight+(i*(textheight+fspaceBetweenLines)),'+'+inttohex(currentaddress-RelativeBase,8))
+      begin
+        {$ifdef USELAZFREETYPE}
+        if (not UseOriginalRenderingSystem) and (drawer<>nil) then
+          drawer.DrawText('+'+inttohex(currentaddress-RelativeBase,8), FTFont,0, 2+2*textheight+(i*(textheight+fspaceBetweenLines)), TColorToFPColor(ColorToRGB(offscreenbitmap.canvas.Font.Color)), [ftaLeft, ftaTop])
+        else
+        {$endif}
+          offscreenbitmap.Canvas.TextOut(0, 2+2*textheight+(i*(textheight+fspaceBetweenLines)),'+'+inttohex(currentaddress-RelativeBase,8))
+
+      end
       else
-        offscreenbitmap.Canvas.TextOut(0, 2+2*textheight+(i*(textheight+fspaceBetweenLines)),'-'+inttohex(RelativeBase-currentaddress,8));
+      begin
+        {$ifdef USELAZFREETYPE}
+        if (not UseOriginalRenderingSystem) and (drawer<>nil) then
+          drawer.DrawText('-'+inttohex(RelativeBase-currentaddress,8), FTFont,0, 2+2*textheight+(i*(textheight+fspaceBetweenLines)), TColorToFPColor(ColorToRGB(offscreenbitmap.canvas.Font.Color)), [ftaLeft, ftaTop])
+        else
+        {$endif}
+          offscreenbitmap.Canvas.TextOut(0, 2+2*textheight+(i*(textheight+fspaceBetweenLines)),'-'+inttohex(RelativeBase-currentaddress,8));
+
+      end;
     end
     else
-      offscreenbitmap.Canvas.TextOut(0, 2+2*textheight+(i*(textheight+fspaceBetweenLines)),inttohex(currentaddress,8));
+    begin
+      {$ifdef USELAZFREETYPE}
+      if (not UseOriginalRenderingSystem) and (drawer<>nil) then
+        drawer.DrawText(inttohex(currentaddress,8), FTFont,0, 2+2*textheight+(i*(textheight+fspaceBetweenLines)), TColorToFPColor(ColorToRGB(offscreenbitmap.canvas.Font.Color)), [ftaLeft, ftaTop])
+      else
+      {$endif}
+        offscreenbitmap.Canvas.TextOut(0, 2+2*textheight+(i*(textheight+fspaceBetweenLines)),inttohex(currentaddress,8));
+
+    end;
 
     bytepos:=0;
     for j:=0 to bytesperline-1 do
     begin
       if inModule(currentaddress) then
-        offscreenbitmap.canvas.Font.Color:=clGreen
+      begin
+        offscreenbitmap.canvas.brush.color:=colors[hcsStatic].backgroundcolor;
+        offscreenbitmap.canvas.Font.Color:=colors[hcsStatic].fontcolor; //  clGreen
+      end
       else
-        offscreenbitmap.canvas.Font.Color:=clWindowText;
+      begin
+        offscreenbitmap.canvas.brush.color:=colors[hcsNormal].backgroundcolor;
+        offscreenbitmap.canvas.Font.Color:=colors[hcsNormal].fontcolor; //clWindowText;
+      end;
 
       if fhasSelection and inrangex(currentaddress,minx(selected,selected2),maxx(selected,selected2)) then
-        offscreenbitmap.canvas.Font.Color:=clRed;
+      begin
+        offscreenbitmap.canvas.brush.color:=colors[hcsHighlighted].backgroundcolor;
+        offscreenbitmap.canvas.Font.Color:=colors[hcsHighlighted].fontcolor;  //clred
+      end;
 
 
 
@@ -2096,27 +2421,29 @@ begin
       begin
         if (editingtype=hrByte) and (currentaddress=selected) then
         begin
-          offscreenbitmap.canvas.Brush.Color:=clHighlight;
-          offscreenbitmap.canvas.Font.Color:=clHighlightText;
+          offscreenbitmap.canvas.Brush.Color:=colors[hcsEditing].backgroundcolor;    //clHighlight;
+          offscreenbitmap.canvas.Font.Color:=colors[hcsEditing].fontcolor; //clHighlightText;
         end
         else
         begin
-          offscreenbitmap.canvas.Brush.Color:=clYellow;
-          offscreenbitmap.canvas.Font.Color:=clWindowText;
+          offscreenbitmap.canvas.Brush.Color:=colors[hcsSecondaryEditing].backgroundcolor; //clYellow;
+          offscreenbitmap.canvas.Font.Color:=colors[hcsSecondaryEditing].fontcolor; //clWindowText;
         end;
       end;
 
+
+      {$IFNDEF STANDALONEHV}
       if debuggerthread<>nil then
       begin
         //check if the current address has a breakpoint
         bp:=debuggerthread.isBreakpoint(currentaddress);
         if bp<>nil then
         begin
-          offscreenbitmap.canvas.Brush.Color:=clGreen;
-          offscreenbitmap.canvas.Font.Color:=clBlack;
+          offscreenbitmap.canvas.Brush.Color:=colors[hcsBreakpoint].backgroundcolor; //clgreen
+          offscreenbitmap.canvas.Font.Color:=colors[hcsBreakpoint].fontcolor; //clblack
         end;
       end;
-
+      {$ENDIF}
 
 
       //todo: refactor this
@@ -2133,6 +2460,7 @@ begin
         dtQWordDec: if (j mod 8)=0 then begin changelist.values[itemnr]:=getQWordDec(currentAddress); displaythis:=true; end;
         dtSingle: if (j mod 4)=0 then begin changelist.values[itemnr]:=getsingle(currentAddress); displaythis:=true; end;
         dtDouble: if (j mod 8)=0 then begin changelist.values[itemnr]:=getDouble(currentAddress); displaythis:=true; end;
+        dtCustom: if (j mod customtype.bytesize)=0 then begin changelist.values[itemnr]:=getCustomTypeValue(currentAddress); displaythis:=true; end;
       end;
 
       if fShowDiffHV<>nil then
@@ -2151,22 +2479,22 @@ begin
           dtQWordDec: if (j mod 4)=0 then different:=changelist.values[itemnr]<>fShowDiffHV.getQWordDec(compareToAddress);
           dtSingle: if (j mod 4)=0 then different:=changelist.values[itemnr]<>fShowDiffHV.getsingle(compareToAddress);
           dtDouble: if (j mod 8)=0 then different:=changelist.values[itemnr]<>fShowDiffHV.getDouble(compareToAddress);
+          dtCustom: if (j mod customtype.bytesize)=0 then different:=changelist.values[itemnr]<>fShowDiffHV.getCustomTypeValue(compareToAddress);
         end;
 
         if different then
         begin
-          offscreenbitmap.canvas.Font.Color:=clYellow;
-          offscreenbitmap.canvas.Brush.Color:=clBlue;
+          offscreenbitmap.canvas.Font.Color:=colors[hcsDifferent].fontcolor; //  clYellow;
+          offscreenbitmap.canvas.Brush.Color:=colors[hcsDifferent].backgroundcolor; //clBlue;
         end;
       end;
 
 
       if gettickcount-changelist.LastChange[itemnr]<fadetimer then
       begin
-//        offscreenbitmap.canvas.Brush.Color:=CalculateGradientColor((fadetimer-(gettickcount-changelist.LastChange[itemnr]))/10, clRed, offscreenbitmap.canvas.Brush.Color);
-        offscreenbitmap.canvas.Brush.Color:=CalculateGradientColor((fadetimer-(gettickcount-changelist.LastChange[itemnr]))/(fadetimer div 100), clRed, offscreenbitmap.canvas.Brush.Color);
-        if offscreenbitmap.canvas.Font.Color=clred then
-          offscreenbitmap.canvas.Font.Color:=clBlue;
+        offscreenbitmap.canvas.Brush.Color:=CalculateGradientColor((fadetimer-(gettickcount-changelist.LastChange[itemnr]))/(fadetimer div 100), fadeColor, offscreenbitmap.canvas.Brush.Color);
+        if offscreenbitmap.canvas.Font.Color=fadecolor then
+          offscreenbitmap.canvas.Font.Color:=colors[hcsDifferent].fontcolor;
       end;
 
       if displaythis then
@@ -2174,8 +2502,13 @@ begin
         s:=changelist.values[itemnr];
         if assigned(fOnValueRender) then
           fOnValueRender(self, currentaddress, s);
+        {$ifdef USELAZFREETYPE}
+        if (not UseOriginalRenderingSystem) and (drawer<>nil) then
+          drawer.DrawText(s, FTFont,bytestart+bytepos*charsize, 2+2*textheight+(i*(textheight+fspaceBetweenLines)), TColorToFPColor(ColorToRGB(offscreenbitmap.canvas.Font.Color)), [ftaLeft, ftaTop])
+        else
+        {$endif}
+          offscreenbitmap.canvas.TextOut(bytestart+bytepos*charsize, 2+2*textheight+(i*(textheight+fspaceBetweenLines)) , s);
 
-        offscreenbitmap.canvas.TextOut(bytestart+bytepos*charsize, 2+2*textheight+(i*(textheight+fspaceBetweenLines)) , s);
       end;
 
 
@@ -2184,13 +2517,13 @@ begin
       begin
         if (editingtype=hrChar) and (currentaddress=selected) then
         begin
-          offscreenbitmap.canvas.Brush.Color:=clHighlight;
-          offscreenbitmap.canvas.Font.Color:=clHighlightText;
+          offscreenbitmap.canvas.Brush.Color:=colors[hcsEditing].backgroundcolor;  //clHighlight;
+          offscreenbitmap.canvas.Font.Color:=colors[hcsEditing].fontcolor; //clHighlightText;
         end
         else
         begin
-          offscreenbitmap.canvas.Brush.Color:=clYellow;
-          offscreenbitmap.canvas.Font.Color:=clWindowText;
+          offscreenbitmap.canvas.Brush.Color:=colors[hcsSecondaryEditing].backgroundcolor; //clYellow;
+          offscreenbitmap.canvas.Font.Color:=colors[hcsSecondaryEditing].fontcolor; //clWindowText;
         end;
       end;
 
@@ -2201,26 +2534,56 @@ begin
         if assigned(fOnCharacterRender) then
           fOnCharacterRender(self, currentaddress, char);
 
-        offscreenbitmap.canvas.TextOut(charstart+j*charsize, 2+2*textheight+(i*(textheight+fspaceBetweenLines)), char); //char
+        {$ifdef USELAZFREETYPE}
+        if (not UseOriginalRenderingSystem) and (drawer<>nil) then
+          drawer.DrawText(char, FTFont,charstart+j*charsize, 2+2*textheight+(i*(textheight+fspaceBetweenLines)), TColorToFPColor(ColorToRGB(offscreenbitmap.canvas.Font.Color)), [ftaLeft, ftaTop])
+        else
+        {$endif}
+          offscreenbitmap.canvas.TextOut(charstart+j*charsize, 2+2*textheight+(i*(textheight+fspaceBetweenLines)), char); //char
+
 
         inc(nextCharAddress, lastcharsize);
       end;
 
 
-      offscreenbitmap.canvas.Font.Color:=clWindowText;
-      offscreenbitmap.canvas.Brush.Color:=clBtnFace;
+      offscreenbitmap.canvas.Font.Color:=colors[hcsNormal].fontcolor; //  clWindowText;
+      offscreenbitmap.canvas.Brush.Color:=colors[hcsNormal].backgroundcolor; //clBtnFace;
 
       if isEditing and (currentAddress=selected) then
       begin
         //render the carret
         offscreenbitmap.canvas.Pen.Width:=2;
-        offscreenbitmap.canvas.Pen.Color:=clRed;
+        offscreenbitmap.canvas.Pen.Color:=cursorcolor;
+
         if editingtype=hrByte then //draw the carret for the byte
-          offscreenbitmap.Canvas.Line(1+bytestart+bytepos*charsize+editingCursorPos*charsize,2+2*textheight+(i*(textheight+fspaceBetweenLines))+1,1+bytestart+bytepos*charsize+editingCursorPos*charsize,2+2*textheight+(i*(textheight+fspaceBetweenLines))+textheight-2)
+        begin
+          {$ifdef USELAZFREETYPE}
+          if (not UseOriginalRenderingSystem) and (drawer<>nil) then
+          begin
+            drawer.DrawVertLine(0+bytestart+bytepos*charsize+editingCursorPos*charsize, 2+2*textheight+(i*(textheight+fspaceBetweenLines))+1, 2+2*textheight+(i*(textheight+fspaceBetweenLines))+textheight-2, colRed);
+            drawer.DrawVertLine(1+bytestart+bytepos*charsize+editingCursorPos*charsize, 2+2*textheight+(i*(textheight+fspaceBetweenLines))+1, 2+2*textheight+(i*(textheight+fspaceBetweenLines))+textheight-2, colRed);
+          end
+          else
+          {$endif}
+            offscreenbitmap.Canvas.Line(1+bytestart+bytepos*charsize+editingCursorPos*charsize,2+2*textheight+(i*(textheight+fspaceBetweenLines))+1,1+bytestart+bytepos*charsize+editingCursorPos*charsize,2+2*textheight+(i*(textheight+fspaceBetweenLines))+textheight-2)
+
+        end
         else //draw the carret for the char
-          offscreenbitmap.Canvas.Line(1+charstart+j*charsize,2+2*textheight+(i*(textheight+fspaceBetweenLines))+1,1+charstart+j*charsize,2+2*textheight+(i*(textheight+fspaceBetweenLines))+textheight-2);
+        begin
+          {$ifdef USELAZFREETYPE}
+          if (not UseOriginalRenderingSystem) and (drawer<>nil) then
+          begin
+            drawer.DrawVertLine(0+charstart+j*charsize,2+2*textheight+(i*(textheight+fspaceBetweenLines))+1,2+2*textheight+(i*(textheight+fspaceBetweenLines))+textheight-2, colRed);
+            drawer.DrawVertLine(1+charstart+j*charsize,2+2*textheight+(i*(textheight+fspaceBetweenLines))+1,2+2*textheight+(i*(textheight+fspaceBetweenLines))+textheight-2, colRed);
+          end
+          else
+          {$endif}
+            offscreenbitmap.Canvas.Line(1+charstart+j*charsize,2+2*textheight+(i*(textheight+fspaceBetweenLines))+1,1+charstart+j*charsize,2+2*textheight+(i*(textheight+fspaceBetweenLines))+textheight-2);
+
+        end;
 
         offscreenbitmap.canvas.Pen.Width:=1;
+
 
       end;
 
@@ -2233,22 +2596,49 @@ begin
     end;
   end;
 
-
-
   for i:=0 to seperatorindex-1 do
   begin
-    offscreenbitmap.Canvas.Pen.Color:=clYellow;
-    offscreenbitmap.Canvas.PenPos:=point(bytestart+(seperators[i]+1)*byteSizeWithoutChar-(charsize shr 1),(textheight+fspaceBetweenLines));
-    offscreenbitmap.Canvas.LineTo(bytestart+(seperators[i]+1)*byteSizeWithoutChar-(charsize shr 1),mbcanvas.height);
+    {$ifdef USELAZFREETYPE}
+    if (not UseOriginalRenderingSystem) and (drawer<>nil) then
+    begin
+      drawer.DrawVertLine(bytestart+(seperators[i]+1)*byteSizeWithoutChar-(charsize shr 1),(textheight+fspaceBetweenLines),mbcanvas.height, colYellow);
+      drawer.DrawVertLine(charstart+(seperators[i]+1)*charsize,(textheight+fspaceBetweenLines),mbcanvas.height, colYellow);
+    end
+    else
+    {$endif}
+    begin
+      offscreenbitmap.Canvas.Pen.Color:=seperatorColor; // clYellow;
+      offscreenbitmap.Canvas.PenPos:=point(bytestart+(seperators[i]+1)*byteSizeWithoutChar-(charsize shr 1),(textheight+fspaceBetweenLines));
+      offscreenbitmap.Canvas.LineTo(bytestart+(seperators[i]+1)*byteSizeWithoutChar-(charsize shr 1),mbcanvas.height);
 
-    offscreenbitmap.Canvas.PenPos:=point(charstart+(seperators[i]+1)*charsize,(textheight+fspaceBetweenLines));
-    offscreenbitmap.Canvas.LineTo(charstart+(seperators[i]+1)*charsize,mbcanvas.height);
+      offscreenbitmap.Canvas.PenPos:=point(charstart+(seperators[i]+1)*charsize,(textheight+fspaceBetweenLines));
+      offscreenbitmap.Canvas.LineTo(charstart+(seperators[i]+1)*charsize,mbcanvas.height);
+    end;
   end;
 
-  offscreenbitmap.Canvas.Pen.Color:=clBlack;
-  offscreenbitmap.Canvas.PenPos:=point(0,textheight*2);
-  offscreenbitmap.Canvas.LineTo(charstart+bytesperline*charsize,textheight*2);
+{$ifdef USELAZFREETYPE}
+  if (not UseOriginalRenderingSystem) and (drawer<>nil) then
+  begin
+    drawer.DrawHorizLine(0,textheight*2, charstart+bytesperline*charsize, colBlack);
+  end
+  else
+{$endif}
+  begin
+    offscreenbitmap.Canvas.Pen.Color:=toplinecolor; //clWindowtext;// clBlack;
+    offscreenbitmap.Canvas.PenPos:=point(0,textheight*2);
+    offscreenbitmap.Canvas.LineTo(charstart+bytesperline*charsize,textheight*2);
+  end;
 
+
+{$ifdef USELAZFREETYPE}
+  if (not UseOriginalRenderingSystem) and (IntfImage<>nil) then
+  begin
+    b:=tbitmap.create();
+    b.LoadFromIntfImage(IntfImage);
+    offscreenbitmap.Canvas.Draw(0,0,b);
+    b.free;
+  end;
+{$endif}
 
   v_qword:=int64(getQWordValue(SelectionStart, unreadable));
   if not unreadable then
@@ -2257,14 +2647,16 @@ begin
     s:='';
 
 
-  if selectionstart=0 then statusbar.SimpleText:='' else
+  if selectionstart=0 then statusbar.panels[0].Text:='' else
   begin
     if selected<>selected2 then
-      statusbar.SimpleText:=format('%.8x - %.8x (%d '+rsBytes+') %s',[SelectionStart, SelectionStop, SelectionStop-SelectionStart+1, s])
+      statusbar.panels[0].Text:=format('%.8x - %.8x (%d '+rsBytes+') %s',[SelectionStart, SelectionStop, SelectionStop-SelectionStart+1, s])
     else
-      statusbar.SimpleText:=format('%.8x %s',[SelectionStart, s])
+      statusbar.panels[0].Text:=format('%.8x %s',[SelectionStart, s])
   end;
 
+
+  lastrendertime:=gettickcount64-starttime;
 end;
 
 procedure THexView.setAddress(a: ptrUint);
@@ -2294,7 +2686,7 @@ begin
     //and now for myself
   end;
 
-  update;
+  //update;
 end;
 
 procedure THexView.hexviewResize(sender: TObject);
@@ -2312,7 +2704,10 @@ begin
     if fAddress<ptrUint($100000000) then
       addresswidth:=addresswidthdefault
     else
+    begin
       addresswidth:=offscreenbitmap.Canvas.TextWidth(inttohex(fAddress,8));
+      addresswidth:=max(offscreenbitmap.Canvas.TextWidth(inttohex(fAddress,8)), offscreenbitmap.Canvas.TextWidth(inttohex(fAddress+totallines*bytesPerLine,8)));
+    end;
     {$else}
     addresswidth:=addresswidthdefault;
     {$endif}
@@ -2361,7 +2756,8 @@ begin
     if offscreenbitmap.Height<mbCanvas.width then
       offscreenbitmap.Height:=mbcanvas.Height;
 
-    offscreenbitmap.Canvas.Brush.Color:=clBtnFace;
+    offscreenbitmap.Canvas.Brush.Color:=colors[hcsNormal].backgroundcolor;
+    offscreenbitmap.Canvas.font.color:=colors[hcsNormal].fontcolor;
     offscreenbitmap.Canvas.FillRect(mbcanvas.ClientRect);
 
     oldAddressWidth:=addresswidth;
@@ -2370,7 +2766,10 @@ begin
     if fAddress<defaultrange then
       addresswidth:=addresswidthdefault
     else
+    begin
       addresswidth:=offscreenbitmap.Canvas.TextWidth(inttohex(fAddress,8));
+      addresswidth:=max(offscreenbitmap.Canvas.TextWidth(inttohex(fAddress,8)), offscreenbitmap.Canvas.TextWidth(inttohex(fAddress+totallines*bytesPerLine,8)));
+    end;
     {$else}
     addresswidth:=addresswidthdefault;
     {$endif}
@@ -2426,7 +2825,7 @@ begin
   if hasSelection then
   begin
     GetSelectionRange(start, stop);
-    result:=(stop-start)+DisplayTypeByteSize[fdisplaytype]=processhandler.pointersize;
+    result:=(stop-start)+DisplayTypeByteSize(fdisplaytype)=processhandler.pointersize;
   end;
 end;
 
@@ -2434,7 +2833,9 @@ procedure THexView.Follow;
 var
   gotoaddress: ptruint;
   x: ptruint;
+{$IFNDEF STANDALONEHV}
   mb: TMemoryBrowser;
+{$ENDIF}
 begin
   if canfollow then
   begin
@@ -2444,6 +2845,7 @@ begin
     if ReadProcessMemory(processhandle, pointer(getSelectionStart), @gotoaddress, processhandler.pointersize,x) then
     begin
       //save the current address in the history
+      {$IFNDEF STANDALONEHV}
       if ssshift in GetKeyShiftState then
       begin
         //spawn a new memoryview window and set the address to there
@@ -2453,6 +2855,7 @@ begin
         mb.show;
       end
       else
+      {$ENDIF}
       begin
         backlist.push(pointer(address));
 
@@ -2483,13 +2886,64 @@ begin
 
   textheight:=offscreenbitmap.Canvas.TextHeight('X?');
   addresswidthdefault:=offscreenbitmap.Canvas.TextWidth('XXXXXXXX');
-
-  charsize:=offscreenbitmap.Canvas.TextWidth('X');
-  byteSize:=offscreenbitmap.Canvas.TextWidth('XX X'); //byte space and the character it represents
-  byteSizeWithoutChar:=offscreenbitmap.Canvas.TextWidth('XX ');
+  {$ifdef USELAZFREETYPE}
+  if (FTFont<>nil) then
+  begin
+    charsize:=ceil(FTFont.TextWidth('X'));
+    byteSize:=ceil(FTFont.TextWidth('XX X'));
+    byteSizeWithoutChar:=ceil(FTFont.TextWidth('XX '));
+  end
+  else
+  {$endif}
+  begin
+    charsize:=offscreenbitmap.Canvas.TextWidth('X');
+    byteSize:=offscreenbitmap.Canvas.TextWidth('XX X'); //byte space and the character it represents
+    byteSizeWithoutChar:=offscreenbitmap.Canvas.TextWidth('XX ');
+  end;
 
   hexviewResize(self);
   update;
+end;
+
+procedure THexview.setCR3(pa: QWORD);
+begin
+  fcr3:=pa;
+end;
+
+function THexview.ReadProcessMemory(hProcess: THandle; lpBaseAddress, lpBuffer: Pointer; nSize: size_t; var lpNumberOfBytesRead: PTRUINT): BOOL;
+begin
+
+  if fcr3=0 then
+    result:={$ifdef windows}newkernelhandler.{$endif}{$ifdef darwin}macport.{$endif}ReadProcessMemory(hProcess, lpBaseAddress, lpBuffer, nsize, lpNumberOfBytesRead)
+  {$ifdef windows}
+  else
+    result:=ReadProcessMemoryCR3(fcr3,lpBaseAddress, lpBuffer, nsize, lpNumberOfBytesRead)
+  {$endif};
+end;
+
+function THexview.WriteProcessMemory(hProcess: THandle; const lpBaseAddress: Pointer; lpBuffer: Pointer; nSize: DWORD; var lpNumberOfBytesWritten: PTRUINT): BOOL;
+begin
+  if fcr3=0 then
+    result:={$ifdef windows}newkernelhandler.{$endif}{$ifdef darwin}macport.{$endif}WriteProcessMemory(hProcess, lpBaseAddress, lpBuffer, nSize, lpNumberOfBytesWritten)
+  {$ifdef windows}
+  else
+    result:=WriteProcessMemoryCR3(fcr3, lpBaseAddress, lpBuffer, nsize, lpNumberOfBytesWritten)
+  {$endif};
+end;
+
+function THexview.VirtualQueryEx(hProcess: THandle; lpAddress: Pointer; var lpBuffer: TMemoryBasicInformation; dwLength: DWORD): DWORD;
+begin
+  if fcr3=0 then
+    result:={$ifdef windows}newkernelhandler.{$endif}{$ifdef darwin}macport.{$endif}VirtualQueryEx(hProcess, lpAddress, lpBuffer, dwLength)
+  {$ifdef windows}
+  else
+  begin
+    if GetPageInfoCR3(fcr3,ptruint(lpAddress), lpBuffer) then
+      result:=dwlength
+    else
+      result:=0;
+  end
+  {$endif};
 end;
 
 destructor THexview.destroy;
@@ -2523,8 +2977,23 @@ end;
 
 constructor THexView.create(AOwner: TComponent);
 var sp: TStatusPanel;
+  p: TStatusPanel;
 begin
   inherited create(AOwner);
+
+  {$ifdef USELAZFREETYPE}
+  if loadCEFreeTypeFonts then
+  begin
+    FTFont:=TFreeTypeFont.Create;
+    FTFont.Name:='Courier New';
+    //FTFont.Hinted:=false; //only for bold
+    //FTFont.SizeInPoints:=12;
+    //FTFont.Style:=[ftsBold];
+
+    IntfImage:=TLazIntfImage.Create(0,0, [riqfRGB]);
+    drawer:=TIntfFreeTypeDrawer.Create(IntfImage);
+  end;
+  {$endif}
 
   fadetimer:=1000;
   backlist:=TStack.create;
@@ -2559,7 +3028,9 @@ begin
   fHexFont:=tfont.create;
   fHexFont.Charset:=DEFAULT_CHARSET;
   fHexFont.Color:=clwindowText;
+  {$IFNDEF STANDALONEHV}
   fHexFont.Height:=GetFontData(MainForm.font.handle).Height;
+  {$ENDIF}
   if fHexFont.Height>-13 then
     fHexFont.Height:=-13;
 
@@ -2570,11 +3041,15 @@ begin
   statusbar.ParentFont:=true;
   statusbar.AutoSize:=false;
   statusbar.Name:='statusbar';
-  statusbar.SimplePanel:=true;
+  statusbar.SimplePanel:=false;
   statusbar.align:=alBottom;
   statusbar.parent:=self;
+  p:=statusbar.Panels.Add;
+  p.Text:='Selection: <none>';
+  p.Width:=clientwidth+9000;
 
-  statusbar.simpletext:='Selection: <none>';
+  statusbar.font.color:=clWindowtext;
+  //statusbar.simpletext:='Selection: <none>';
 
 
 
@@ -2598,14 +3073,54 @@ begin
   self.OnResize:=hexviewResize;
 
   offscreenbitmap:=TBitmap.create;
+  offscreenbitmap.PixelFormat:=pf32bit;
   offscreenbitmap.canvas.font.Assign(fHexFont);
+
 
   textheight:=offscreenbitmap.Canvas.TextHeight('X?');
   addresswidthdefault:=offscreenbitmap.Canvas.TextWidth('XXXXXXXX');
 
-  charsize:=offscreenbitmap.Canvas.TextWidth('X');
-  byteSize:=offscreenbitmap.Canvas.TextWidth('XX X'); //byte space and the character it represents
-  byteSizeWithoutChar:=offscreenbitmap.Canvas.TextWidth('XX ');
+  {$ifdef USELAZFREETYPE}
+  if FTFont<>nil then
+  begin
+    charsize:=ceil(FTFont.TextWidth('X'));
+    byteSize:=ceil(FTFont.TextWidth('XX X'));
+    byteSizeWithoutChar:=ceil(FTFont.TextWidth('XX '));
+  end
+  else
+  {$endif}
+  begin
+    charsize:=offscreenbitmap.Canvas.TextWidth('X');
+    byteSize:=offscreenbitmap.Canvas.TextWidth('XX X'); //byte space and the character it represents
+    byteSizeWithoutChar:=offscreenbitmap.Canvas.TextWidth('XX ');
+  end;
+
+
+  colors[hcsNormal].backgroundcolor:=clBtnFace;
+  colors[hcsNormal].fontcolor:=clWindowtext;
+
+  colors[hcsStatic].backgroundcolor:=clBtnFace;
+  colors[hcsStatic].fontcolor:=clGreen;
+
+  colors[hcsHighlighted].backgroundcolor:=clBtnFace;
+  colors[hcsHighlighted].fontcolor:=clRed;
+
+  colors[hcsEditing].backgroundcolor:=clHighlight;
+  colors[hcsEditing].fontcolor:=clHighlighttext;
+
+  colors[hcsSecondaryEditing].backgroundcolor:=clYellow;
+  colors[hcsSecondaryEditing].fontcolor:=clWindowtext;
+
+  colors[hcsBreakpoint].backgroundcolor:=clGreen;
+  colors[hcsBreakpoint].fontcolor:=clBlack;
+
+  colors[hcsDifferent].backgroundcolor:=clBlue;
+  colors[hcsDifferent].fontcolor:=clYellow;
+
+  seperatorColor:=clYellow;
+  cursorColor:=clRed;
+  toplinecolor:=clWindowtext;
+  fadeColor:=clRed;
 
   update;
 end;
